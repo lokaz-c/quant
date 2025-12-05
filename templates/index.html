@@ -4,209 +4,446 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Quant Portfolio Simulator</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
+        /* ===== RESET & FOUNDATIONAL ===== */
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
 
+        :root {
+            --bg-primary: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --bg-elevated: #1f1f1f;
+            --border: #2a2a2a;
+            --border-focus: #3a3a3a;
+            --text-primary: #e5e5e5;
+            --text-secondary: #a0a0a0;
+            --text-tertiary: #6a6a6a;
+            --accent: #3b82f6;
+            --accent-dim: #2563eb;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             min-height: 100vh;
-            padding: 20px;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
         }
 
-        .container {
-            max-width: 1200px;
+        /* ===== NAVIGATION ===== */
+        nav {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 0;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+
+        .nav-container {
+            max-width: 1400px;
             margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
-        header {
-            text-align: center;
-            color: white;
-            margin-bottom: 30px;
-        }
-
-        h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-
-        .subtitle {
-            font-size: 1.1em;
-            opacity: 0.9;
-        }
-
-        .card {
-            background: white;
-            border-radius: 12px;
-            padding: 25px;
-            margin-bottom: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
+        .nav-logo {
+            font-size: 1.125rem;
             font-weight: 600;
-            color: #333;
+            letter-spacing: -0.02em;
+            color: var(--text-primary);
         }
 
-        select, input {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9375rem;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover {
+            color: var(--text-primary);
+        }
+
+        /* ===== MAIN CONTAINER ===== */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 3rem 2rem;
+        }
+
+        /* ===== HEADER ===== */
+        .page-header {
+            margin-bottom: 3rem;
+        }
+
+        .page-title {
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            margin-bottom: 0.5rem;
+        }
+
+        .page-subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+
+        /* ===== CONTROL PANEL ===== */
+        .control-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            font-size: 15px;
-            transition: border-color 0.3s;
+            padding: 2rem;
+            margin-bottom: 2rem;
         }
 
-        select:focus, input:focus {
-            outline: none;
-            border-color: #667eea;
+        .panel-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-tertiary);
+            margin-bottom: 1.5rem;
         }
 
-        .row {
+        .control-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
         }
 
-        button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .input-label {
+            font-size: 0.8125rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            letter-spacing: 0.01em;
+        }
+
+        .input-field, .input-select {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            font-size: 0.9375rem;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        .input-field:focus, .input-select:focus {
+            outline: none;
+            border-color: var(--accent);
+            background: var(--bg-elevated);
+        }
+
+        .input-field::placeholder {
+            color: var(--text-tertiary);
+        }
+
+        /* Risk Preview */
+        .risk-preview {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 1rem;
+            margin-top: 0.5rem;
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+            display: none;
+        }
+
+        .risk-preview.active {
+            display: block;
+        }
+
+        .risk-param {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.25rem;
+        }
+
+        .risk-param:last-child {
+            margin-bottom: 0;
+        }
+
+        /* Run Button */
+        .btn-run {
+            background: var(--accent);
             color: white;
             border: none;
-            padding: 15px 30px;
-            font-size: 16px;
+            padding: 1rem 2rem;
+            font-size: 1rem;
             font-weight: 600;
-            border-radius: 8px;
+            border-radius: 6px;
             cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 1.5rem;
             width: 100%;
-            transition: transform 0.2s;
         }
 
-        button:hover {
-            transform: translateY(-2px);
+        .btn-run:hover {
+            background: var(--accent-dim);
         }
 
-        button:active {
-            transform: translateY(0);
+        .btn-run:active {
+            transform: translateY(1px);
         }
 
+        .btn-run:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ===== LOADING STATE ===== */
         .loading {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 3rem;
             text-align: center;
-            padding: 40px;
             display: none;
+        }
+
+        .loading.active {
+            display: block;
         }
 
         .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
+            width: 48px;
+            height: 48px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
             border-radius: 50%;
-            width: 50px;
-            height: 50px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 1rem;
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            to { transform: rotate(360deg); }
         }
 
-        .results {
+        .loading-text {
+            color: var(--text-secondary);
+            font-size: 0.9375rem;
+        }
+
+        /* ===== ERROR STATE ===== */
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid var(--danger);
+            border-radius: 8px;
+            padding: 1rem;
+            color: var(--danger);
+            font-size: 0.9375rem;
+            margin-bottom: 2rem;
             display: none;
         }
 
-        .metric-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-top: 20px;
+        .error.active {
+            display: block;
         }
 
-        .metric {
-            background: #f8f9fa;
-            padding: 15px;
+        /* ===== RESULTS SECTION ===== */
+        .results-section {
+            display: none;
+        }
+
+        .results-section.active {
+            display: block;
+        }
+
+        /* ===== METRICS PANELS ===== */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            text-align: center;
+            padding: 1.5rem;
+        }
+
+        .metric-panel-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-tertiary);
+            margin-bottom: 1.25rem;
+        }
+
+        .metric-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 1rem;
+        }
+
+        .metric-item:last-child {
+            margin-bottom: 0;
         }
 
         .metric-label {
-            font-size: 0.9em;
-            color: #666;
-            margin-bottom: 5px;
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
         }
 
         .metric-value {
-            font-size: 1.8em;
-            font-weight: 700;
-            color: #333;
+            font-size: 1.5rem;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -0.02em;
         }
 
         .metric-value.positive {
-            color: #10b981;
+            color: var(--success);
         }
 
         .metric-value.negative {
-            color: #ef4444;
+            color: var(--danger);
         }
 
-        .error {
-            background: #fee;
-            border: 2px solid #fcc;
-            color: #c00;
-            padding: 15px;
+        .metric-value.warning {
+            color: var(--warning);
+        }
+
+        /* ===== CHARTS ===== */
+        .chart-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            margin: 20px 0;
-            display: none;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
         }
 
-        .success {
-            background: #efe;
-            border: 2px solid #cfc;
-            color: #060;
-            padding: 15px;
+        .chart-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+        }
+
+        .chart-canvas {
+            position: relative;
+            height: 300px;
+        }
+
+        /* ===== TRADES TABLE ===== */
+        .trades-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            margin: 20px 0;
+            overflow: hidden;
         }
 
-        .chart-placeholder {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 40px;
-            text-align: center;
-            color: #666;
-            margin-top: 20px;
+        .table-header {
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border);
         }
 
+        .table-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .trades-table-wrapper {
+            overflow-x: auto;
+        }
+
+        .trades-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .trades-table thead {
+            background: var(--bg-tertiary);
+            position: sticky;
+            top: 0;
+        }
+
+        .trades-table th {
+            padding: 0.75rem 1.5rem;
+            text-align: left;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-tertiary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .trades-table td {
+            padding: 1rem 1.5rem;
+            font-size: 0.875rem;
+            border-bottom: 1px solid var(--border);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .trades-table tbody tr:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .trades-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* ===== TABS ===== */
         .tabs {
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            border-bottom: 2px solid #e0e0e0;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2rem;
         }
 
         .tab {
-            padding: 12px 24px;
             background: none;
             border: none;
+            color: var(--text-secondary);
+            padding: 0.75rem 1.5rem;
+            font-size: 0.9375rem;
+            font-weight: 500;
             cursor: pointer;
-            font-weight: 600;
-            color: #666;
-            border-bottom: 3px solid transparent;
-            transition: all 0.3s;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
         }
 
         .tab.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
+            color: var(--text-primary);
+            border-bottom-color: var(--accent);
         }
 
         .tab-content {
@@ -216,93 +453,231 @@
         .tab-content.active {
             display: block;
         }
+
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 768px) {
+            .container {
+                padding: 2rem 1rem;
+            }
+
+            .nav-container {
+                padding: 0 1rem;
+            }
+
+            .nav-links {
+                display: none;
+            }
+
+            .control-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .metrics-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .metric-value {
+                font-size: 1.25rem;
+            }
+
+            .chart-canvas {
+                height: 250px;
+            }
+        }
     </style>
 </head>
 <body>
+    <!-- Navigation -->
+    <nav>
+        <div class="nav-container">
+            <div class="nav-logo">Quant Simulator</div>
+            <ul class="nav-links">
+                <li><a href="https://github.com/lokaz-c/quant" target="_blank">GitHub</a></li>
+                <li><a href="https://lorenzokamanzi.com" target="_blank">Portfolio</a></li>
+                <li><a href="/api/strategies/">API</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
     <div class="container">
-        <header>
-            <h1>Quant Portfolio Simulator</h1>
-            <p class="subtitle">Trading Strategy Backtesting Platform</p>
-        </header>
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1 class="page-title">Portfolio Backtesting</h1>
+            <p class="page-subtitle">Quantitative strategy performance analysis</p>
+        </div>
 
-        <div class="card">
-            <h2>Run Backtest</h2>
+        <!-- Control Panel -->
+        <div class="control-panel">
+            <h2 class="panel-title">Simulation Parameters</h2>
             <form id="backtestForm">
-                <div class="row">
-                    <div class="form-group">
-                        <label for="strategy">Strategy</label>
-                        <select id="strategy" required>
-                            <option value="">Select Strategy...</option>
+                <div class="control-grid">
+                    <div class="input-group">
+                        <label class="input-label" for="strategy">Strategy</label>
+                        <select id="strategy" class="input-select" required>
+                            <option value="">Select strategy...</option>
                         </select>
                     </div>
 
-                    <div class="form-group">
-                        <label for="riskConfig">Risk Configuration</label>
-                        <select id="riskConfig" required>
-                            <option value="">Select Risk Profile...</option>
+                    <div class="input-group">
+                        <label class="input-label" for="riskConfig">Risk Management</label>
+                        <select id="riskConfig" class="input-select" required>
+                            <option value="">Select risk profile...</option>
                         </select>
+                        <div id="riskPreview" class="risk-preview"></div>
+                    </div>
+
+                    <div class="input-group">
+                        <label class="input-label" for="capital">Initial Capital</label>
+                        <input type="number" id="capital" class="input-field" value="100000" min="1000" step="1000" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label class="input-label" for="symbols">Symbols</label>
+                        <input type="text" id="symbols" class="input-field" placeholder="AAPL, GOOGL, MSFT" value="AAPL,GOOGL,MSFT">
+                    </div>
+
+                    <div class="input-group">
+                        <label class="input-label" for="startDate">Start Date</label>
+                        <input type="date" id="startDate" class="input-field" value="2022-01-01" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label class="input-label" for="endDate">End Date</label>
+                        <input type="date" id="endDate" class="input-field" value="2023-12-31" required>
                     </div>
                 </div>
 
-                <div class="row">
-                    <div class="form-group">
-                        <label for="startDate">Start Date</label>
-                        <input type="date" id="startDate" value="2022-01-01" required>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="endDate">End Date</label>
-                        <input type="date" id="endDate" value="2023-12-31" required>
-                    </div>
-                </div>
-
-                <div class="row">
-                    <div class="form-group">
-                        <label for="capital">Initial Capital ($)</label>
-                        <input type="number" id="capital" value="100000" min="1000" step="1000" required>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="symbols">Symbols (comma-separated)</label>
-                        <input type="text" id="symbols" placeholder="AAPL, GOOGL, MSFT" value="AAPL,GOOGL,MSFT">
-                    </div>
-                </div>
-
-                <button type="submit">Run Backtest</button>
+                <button type="submit" class="btn-run">Run Backtest</button>
             </form>
         </div>
 
-        <div class="loading" id="loading">
+        <!-- Loading State -->
+        <div id="loading" class="loading">
             <div class="spinner"></div>
-            <p style="margin-top: 20px; color: white; font-size: 1.2em;">Running backtest...</p>
+            <p class="loading-text">Executing backtest simulation...</p>
         </div>
 
-        <div class="error" id="error"></div>
+        <!-- Error State -->
+        <div id="error" class="error"></div>
 
-        <div class="results card" id="results">
-            <h2>Backtest Results</h2>
+        <!-- Results Section -->
+        <div id="results" class="results-section">
+            <!-- Metrics Panels -->
+            <div class="metrics-grid">
+                <!-- Performance Panel -->
+                <div class="metric-panel">
+                    <h3 class="metric-panel-title">Performance</h3>
+                    <div class="metric-item">
+                        <span class="metric-label">Total Return</span>
+                        <span id="metric-return" class="metric-value">—</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">CAGR</span>
+                        <span id="metric-cagr" class="metric-value">—</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Final Equity</span>
+                        <span id="metric-equity" class="metric-value">—</span>
+                    </div>
+                </div>
 
-            <div class="tabs">
-                <button class="tab active" onclick="switchTab('metrics')">Metrics</button>
-                <button class="tab" onclick="switchTab('trades')">Trades</button>
-            </div>
+                <!-- Risk Panel -->
+                <div class="metric-panel">
+                    <h3 class="metric-panel-title">Risk</h3>
+                    <div class="metric-item">
+                        <span class="metric-label">Max Drawdown</span>
+                        <span id="metric-drawdown" class="metric-value">—</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Volatility</span>
+                        <span id="metric-volatility" class="metric-value">—</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Sharpe Ratio</span>
+                        <span id="metric-sharpe" class="metric-value">—</span>
+                    </div>
+                </div>
 
-            <div id="metricsTab" class="tab-content active">
-                <div class="metric-grid" id="metricsGrid"></div>
-
-                <div class="chart-placeholder">
-                    <p>Equity Curve</p>
-                    <p style="font-size: 0.9em; margin-top: 10px;">Chart visualization would be displayed here using a charting library like Chart.js</p>
+                <!-- Execution Panel -->
+                <div class="metric-panel">
+                    <h3 class="metric-panel-title">Execution</h3>
+                    <div class="metric-item">
+                        <span class="metric-label">Win Rate</span>
+                        <span id="metric-winrate" class="metric-value">—</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Total Trades</span>
+                        <span id="metric-trades" class="metric-value">—</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Avg Win / Loss</span>
+                        <span id="metric-avgwin" class="metric-value">—</span>
+                    </div>
                 </div>
             </div>
 
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('charts')">Charts</button>
+                <button class="tab" onclick="switchTab('trades')">Trades</button>
+            </div>
+
+            <!-- Charts Tab -->
+            <div id="chartsTab" class="tab-content active">
+                <div class="chart-container">
+                    <h3 class="chart-title">Equity Curve</h3>
+                    <div class="chart-canvas">
+                        <canvas id="equityChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="chart-container">
+                    <h3 class="chart-title">Drawdown</h3>
+                    <div class="chart-canvas">
+                        <canvas id="drawdownChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trades Tab -->
             <div id="tradesTab" class="tab-content">
-                <div id="tradesContent"></div>
+                <div class="trades-container">
+                    <div class="table-header">
+                        <h3 class="table-title">Trade History</h3>
+                    </div>
+                    <div class="trades-table-wrapper">
+                        <table class="trades-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Entry</th>
+                                    <th>Exit</th>
+                                    <th>Qty</th>
+                                    <th>P&L</th>
+                                    <th>Return</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tradesTableBody">
+                                <tr>
+                                    <td colspan="7" style="text-align: center; color: var(--text-tertiary); padding: 2rem;">
+                                        No trades to display
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
+        let equityChartInstance = null;
+        let drawdownChartInstance = null;
+        let currentRiskConfigs = [];
+
         // Load strategies and risk configs on page load
         document.addEventListener('DOMContentLoaded', async () => {
             await loadStrategies();
@@ -330,6 +705,7 @@
             try {
                 const response = await fetch('/api/risk-configs/');
                 const configs = await response.json();
+                currentRiskConfigs = configs;
 
                 const select = document.getElementById('riskConfig');
                 configs.forEach(config => {
@@ -338,18 +714,45 @@
                     option.textContent = config.name;
                     select.appendChild(option);
                 });
+
+                // Add risk preview on selection
+                select.addEventListener('change', (e) => {
+                    const selectedConfig = configs.find(c => c.name === e.target.value);
+                    if (selectedConfig) {
+                        showRiskPreview(selectedConfig);
+                    }
+                });
             } catch (error) {
                 console.error('Error loading risk configs:', error);
             }
+        }
+
+        function showRiskPreview(config) {
+            const preview = document.getElementById('riskPreview');
+            preview.innerHTML = `
+                <div class="risk-param">
+                    <span>Max Position:</span>
+                    <span>${(config.max_position_size * 100).toFixed(0)}%</span>
+                </div>
+                <div class="risk-param">
+                    <span>Stop Loss:</span>
+                    <span>${config.stop_loss_pct ? (config.stop_loss_pct * 100).toFixed(1) + '%' : 'None'}</span>
+                </div>
+                <div class="risk-param">
+                    <span>Take Profit:</span>
+                    <span>${config.take_profit_pct ? (config.take_profit_pct * 100).toFixed(1) + '%' : 'None'}</span>
+                </div>
+            `;
+            preview.classList.add('active');
         }
 
         document.getElementById('backtestForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
             // Hide previous results and errors
-            document.getElementById('results').style.display = 'none';
-            document.getElementById('error').style.display = 'none';
-            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').classList.remove('active');
+            document.getElementById('error').classList.remove('active');
+            document.getElementById('loading').classList.add('active');
 
             // Get form data
             const symbols = document.getElementById('symbols').value
@@ -384,58 +787,171 @@
                 displayResults(result);
 
             } catch (error) {
-                document.getElementById('error').textContent = 'Error: ' + error.message;
-                document.getElementById('error').style.display = 'block';
+                const errorEl = document.getElementById('error');
+                errorEl.textContent = error.message;
+                errorEl.classList.add('active');
             } finally {
-                document.getElementById('loading').style.display = 'none';
+                document.getElementById('loading').classList.remove('active');
             }
         });
 
         function displayResults(result) {
             const metrics = result.metrics;
-            const grid = document.getElementById('metricsGrid');
-            grid.innerHTML = '';
 
-            const metricsToDisplay = [
-                { label: 'Total Return', value: metrics.total_return, suffix: '%', colorize: true },
-                { label: 'CAGR', value: metrics.cagr, suffix: '%', colorize: true },
-                { label: 'Max Drawdown', value: metrics.max_drawdown, suffix: '%', colorize: false },
-                { label: 'Sharpe Ratio', value: metrics.sharpe_ratio, suffix: '', colorize: false },
-                { label: 'Volatility', value: metrics.volatility, suffix: '%', colorize: false },
-                { label: 'Win Rate', value: metrics.win_rate, suffix: '%', colorize: false },
-                { label: 'Num Trades', value: metrics.num_trades, suffix: '', colorize: false },
-                { label: 'Final Equity', value: metrics.final_equity, suffix: '', prefix: '$', colorize: false }
-            ];
+            // Update Performance Metrics
+            updateMetric('metric-return', metrics.total_return, '%', true);
+            updateMetric('metric-cagr', metrics.cagr, '%', true);
+            updateMetric('metric-equity', metrics.final_equity, '', false, '$');
 
-            metricsToDisplay.forEach(metric => {
-                const div = document.createElement('div');
-                div.className = 'metric';
+            // Update Risk Metrics
+            updateMetric('metric-drawdown', metrics.max_drawdown, '%', false);
+            updateMetric('metric-volatility', metrics.volatility, '%', false);
+            updateMetric('metric-sharpe', metrics.sharpe_ratio, '', false);
 
-                const label = document.createElement('div');
-                label.className = 'metric-label';
-                label.textContent = metric.label;
+            // Update Execution Metrics
+            updateMetric('metric-winrate', metrics.win_rate, '%', false);
+            updateMetric('metric-trades', metrics.num_trades, '', false);
 
-                const value = document.createElement('div');
-                value.className = 'metric-value';
+            const avgWinLoss = `${metrics.avg_win.toFixed(1)} / ${Math.abs(metrics.avg_loss).toFixed(1)}`;
+            document.getElementById('metric-avgwin').textContent = avgWinLoss;
 
-                if (metric.colorize && metric.value > 0) {
-                    value.classList.add('positive');
-                } else if (metric.colorize && metric.value < 0) {
-                    value.classList.add('negative');
+            // Show results
+            document.getElementById('results').classList.add('active');
+
+            // Render charts (placeholder data for now)
+            renderEquityChart();
+            renderDrawdownChart();
+        }
+
+        function updateMetric(id, value, suffix, colorize, prefix = '') {
+            const element = document.getElementById(id);
+            const formatted = typeof value === 'number' ? value.toFixed(2) : value;
+            element.textContent = `${prefix}${formatted}${suffix}`;
+
+            // Apply color
+            element.classList.remove('positive', 'negative', 'warning');
+            if (colorize) {
+                if (value > 0) {
+                    element.classList.add('positive');
+                } else if (value < 0) {
+                    element.classList.add('negative');
                 }
+            }
+        }
 
-                const formattedValue = typeof metric.value === 'number'
-                    ? metric.value.toFixed(2)
-                    : metric.value;
+        function renderEquityChart() {
+            const ctx = document.getElementById('equityChart').getContext('2d');
 
-                value.textContent = `${metric.prefix || ''}${formattedValue}${metric.suffix}`;
+            if (equityChartInstance) {
+                equityChartInstance.destroy();
+            }
 
-                div.appendChild(label);
-                div.appendChild(value);
-                grid.appendChild(div);
+            // Placeholder data - replace with actual equity curve data
+            const data = Array.from({length: 20}, (_, i) => ({
+                x: i,
+                y: 100000 + Math.random() * 5000 * i
+            }));
+
+            equityChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Equity',
+                        data: data,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: false
+                        },
+                        y: {
+                            grid: {
+                                color: '#2a2a2a',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                color: '#6a6a6a',
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        }
+                    }
+                }
             });
+        }
 
-            document.getElementById('results').style.display = 'block';
+        function renderDrawdownChart() {
+            const ctx = document.getElementById('drawdownChart').getContext('2d');
+
+            if (drawdownChartInstance) {
+                drawdownChartInstance.destroy();
+            }
+
+            // Placeholder data - replace with actual drawdown data
+            const data = Array.from({length: 20}, (_, i) => ({
+                x: i,
+                y: -Math.random() * 15
+            }));
+
+            drawdownChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Drawdown',
+                        data: data,
+                        borderColor: '#ef4444',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: false
+                        },
+                        y: {
+                            grid: {
+                                color: '#2a2a2a',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                color: '#6a6a6a',
+                                font: {
+                                    size: 11
+                                },
+                                callback: function(value) {
+                                    return value + '%';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
         }
 
         function switchTab(tabName) {

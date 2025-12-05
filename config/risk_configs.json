@@ -1,0 +1,38 @@
+{
+  "no_risk": {
+    "name": "No Risk Management",
+    "max_position_size": 1.0,
+    "max_portfolio_exposure": 1.0,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "max_drawdown_pct": null,
+    "enabled": false
+  },
+  "conservative": {
+    "name": "Conservative",
+    "max_position_size": 0.15,
+    "max_portfolio_exposure": 0.60,
+    "stop_loss_pct": 0.05,
+    "take_profit_pct": 0.15,
+    "max_drawdown_pct": 0.20,
+    "enabled": true
+  },
+  "moderate": {
+    "name": "Moderate",
+    "max_position_size": 0.20,
+    "max_portfolio_exposure": 0.80,
+    "stop_loss_pct": 0.08,
+    "take_profit_pct": 0.20,
+    "max_drawdown_pct": 0.30,
+    "enabled": true
+  },
+  "aggressive": {
+    "name": "Aggressive",
+    "max_position_size": 0.30,
+    "max_portfolio_exposure": 1.0,
+    "stop_loss_pct": 0.12,
+    "take_profit_pct": 0.30,
+    "max_drawdown_pct": 0.40,
+    "enabled": true
+  }
+}

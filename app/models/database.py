@@ -3,14 +3,19 @@ Database models and ORM setup using SQLAlchemy
 """
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, Date, Text, ForeignKey, ARRAY, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, Date, Text, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from contextlib import contextmanager
 
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://quant_user:quant_pass@localhost:5432/quant_db')
+# Use SQLite for local development, PostgreSQL for production
+DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///quant.db')
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=10, max_overflow=20)
+# SQLite doesn't support some PostgreSQL features, so we adjust
+if DATABASE_URL.startswith('sqlite'):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=10, max_overflow=20)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -53,7 +58,7 @@ class BacktestRun(Base):
     start_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)
     initial_capital = Column(Float, nullable=False)
-    symbols = Column(ARRAY(String))
+    symbols = Column(JSON)  # Store as JSON array for SQLite compatibility
     market_regime = Column(String(50))
     status = Column(String(50), default='pending')
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -107,10 +107,20 @@ class BacktestService:
                 backtest_run.status = 'completed'
                 backtest_run.completed_at = datetime.utcnow()
 
-                # Store metrics
+                # Store metrics (only fields that exist in the database model)
+                metrics_data = results['metrics']
                 metrics = BacktestMetrics(
                     backtest_run_id=backtest_id,
-                    **results['metrics']
+                    total_return=metrics_data['total_return'],
+                    cagr=metrics_data['cagr'],
+                    max_drawdown=metrics_data['max_drawdown'],
+                    volatility=metrics_data['volatility'],
+                    sharpe_ratio=metrics_data['sharpe_ratio'],
+                    win_rate=metrics_data['win_rate'],
+                    avg_win=metrics_data['avg_win'],
+                    avg_loss=metrics_data['avg_loss'],
+                    num_trades=metrics_data['num_trades'],
+                    final_equity=metrics_data['final_equity']
                 )
                 db.add(metrics)
 

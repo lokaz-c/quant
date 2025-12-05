@@ -19,3 +19,6 @@ data/*.csv
 !data/sample_data.csv
 .DS_Store
 postgres_data/
+*.db
+*.sqlite
+*.sqlite3

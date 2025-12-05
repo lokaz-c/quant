@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: quant-portfolio-simulator
+    env: python
+    buildCommand: "pip install -r requirements.txt && python init_db.py"
+    startCommand: "gunicorn app.main:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        value: sqlite:///quant.db

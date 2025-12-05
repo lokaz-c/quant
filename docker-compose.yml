@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: quant_db
+      POSTGRES_USER: quant_user
+      POSTGRES_PASSWORD: quant_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant_user -d quant_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      DATABASE_URL: postgresql://quant_user:quant_pass@db:5432/quant_db
+      FLASK_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    command: >
+      sh -c "
+        python -c 'from app.models.database import init_db; init_db()' &&
+        gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 300 app.main:app
+      "
+
+volumes:
+  postgres_data:

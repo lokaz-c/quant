@@ -1,0 +1,111 @@
+Quant/
+│
+├── 📄 README.md                          # Comprehensive documentation
+├── 📄 QUICKSTART.md                      # 3-minute setup guide
+├── 📄 API_EXAMPLES.md                    # Complete API reference
+├── 📄 PROJECT_SUMMARY.md                 # Technical overview
+├── 📄 Dockerfile                         # Container definition
+├── 📄 docker-compose.yml                 # Multi-service orchestration
+├── 📄 requirements.txt                   # Python dependencies
+├── 📄 Makefile                          # Helper commands
+├── 📄 pytest.ini                        # Test configuration
+├── 📄 run_example.py                    # Example backtest script
+├── 📄 .env.example                      # Environment template
+├── 📄 .gitignore                        # Git ignore rules
+│
+├── 📁 app/                              # Flask application
+│   ├── 📄 __init__.py
+│   ├── 📄 main.py                       # Flask entry point & routes
+│   │
+│   ├── 📁 models/                       # Database models
+│   │   ├── 📄 __init__.py
+│   │   └── 📄 database.py              # SQLAlchemy ORM models
+│   │
+│   ├── 📁 routes/                       # API endpoints
+│   │   ├── 📄 __init__.py
+│   │   ├── 📄 backtest_routes.py       # Backtest API
+│   │   ├── 📄 strategy_routes.py       # Strategy management
+│   │   └── 📄 risk_routes.py           # Risk configuration
+│   │
+│   └── 📁 services/                     # Business logic
+│       ├── 📄 __init__.py
+│       └── 📄 backtest_service.py      # Backtest service layer
+│
+├── 📁 backtest_engine/                  # Core backtesting engine
+│   ├── 📄 __init__.py
+│   ├── 📄 backtester.py                # Main backtest orchestration
+│   ├── 📄 data_loader.py               # Historical data management
+│   ├── 📄 portfolio.py                 # Portfolio & position tracking
+│   ├── 📄 risk.py                      # Risk management engine
+│   ├── 📄 metrics.py                   # Performance metrics calculator
+│   ├── 📄 strategy_base.py             # Strategy interface/ABC
+│   │
+│   └── 📁 strategies/                   # Trading strategies
+│       ├── 📄 __init__.py
+│       ├── 📄 moving_average.py        # MA Crossover strategy
+│       ├── 📄 rsi_strategy.py          # RSI Mean Reversion
+│       └── 📄 trend_following.py       # Breakout Trend Following
+│
+├── 📁 templates/                        # Web UI templates
+│   └── 📄 index.html                   # Main web interface
+│
+├── 📁 static/                           # Static assets
+│   └── 📄 .gitkeep
+│
+├── 📁 db/                               # Database setup
+│   └── 📄 init.sql                     # Schema & seed data
+│
+├── 📁 data/                             # Market data
+│   └── 📄 sample_data.csv              # 32,625 historical records
+│
+└── 📁 tests/                            # Unit tests
+    ├── 📄 __init__.py
+    ├── 📄 test_portfolio.py            # Portfolio tests
+    ├── 📄 test_risk.py                 # Risk management tests
+    └── 📄 test_metrics.py              # Metrics calculation tests
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 PROJECT STATISTICS
+
+Total Files:              40+
+Python Files:             26
+Test Files:               4
+Documentation Files:      4
+Lines of Python Code:     2,845
+Historical Data Points:   32,625
+Stock Symbols:            25
+Date Range:              2020-2024 (5 years)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 KEY COMPONENTS
+
+Backend Framework:        Flask
+Database:                PostgreSQL 15
+Data Processing:         Pandas, NumPy
+Containerization:        Docker, Docker Compose
+Testing:                 Pytest
+ORM:                     SQLAlchemy
+
+Trading Strategies:      3 (MA Crossover, RSI, Trend Following)
+Risk Configurations:     4 (None, Conservative, Moderate, Aggressive)
+Performance Metrics:     12+ indicators
+API Endpoints:           8 REST endpoints
+Database Tables:         6 with relationships
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 DEPLOYMENT READY
+
+✓ Single command setup:  docker-compose up --build
+✓ Health checks enabled
+✓ Database auto-init
+✓ Volume persistence
+✓ Production-ready architecture
+
+Web UI:                  http://localhost:5000
+API:                     http://localhost:5000/api/
+Health:                  http://localhost:5000/health
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

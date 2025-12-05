@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quant Portfolio Simulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        select, input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 15px;
+            transition: border-color 0.3s;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            transition: transform 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            display: none;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .results {
+            display: none;
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .metric {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .metric-value.positive {
+            color: #10b981;
+        }
+
+        .metric-value.negative {
+            color: #ef4444;
+        }
+
+        .error {
+            background: #fee;
+            border: 2px solid #fcc;
+            color: #c00;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: none;
+        }
+
+        .success {
+            background: #efe;
+            border: 2px solid #cfc;
+            color: #060;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .chart-placeholder {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            color: #666;
+            margin-top: 20px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Quant Portfolio Simulator</h1>
+            <p class="subtitle">Trading Strategy Backtesting Platform</p>
+        </header>
+
+        <div class="card">
+            <h2>Run Backtest</h2>
+            <form id="backtestForm">
+                <div class="row">
+                    <div class="form-group">
+                        <label for="strategy">Strategy</label>
+                        <select id="strategy" required>
+                            <option value="">Select Strategy...</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="riskConfig">Risk Configuration</label>
+                        <select id="riskConfig" required>
+                            <option value="">Select Risk Profile...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="form-group">
+                        <label for="startDate">Start Date</label>
+                        <input type="date" id="startDate" value="2022-01-01" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="endDate">End Date</label>
+                        <input type="date" id="endDate" value="2023-12-31" required>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="form-group">
+                        <label for="capital">Initial Capital ($)</label>
+                        <input type="number" id="capital" value="100000" min="1000" step="1000" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="symbols">Symbols (comma-separated)</label>
+                        <input type="text" id="symbols" placeholder="AAPL, GOOGL, MSFT" value="AAPL,GOOGL,MSFT">
+                    </div>
+                </div>
+
+                <button type="submit">Run Backtest</button>
+            </form>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p style="margin-top: 20px; color: white; font-size: 1.2em;">Running backtest...</p>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div class="results card" id="results">
+            <h2>Backtest Results</h2>
+
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('metrics')">Metrics</button>
+                <button class="tab" onclick="switchTab('trades')">Trades</button>
+            </div>
+
+            <div id="metricsTab" class="tab-content active">
+                <div class="metric-grid" id="metricsGrid"></div>
+
+                <div class="chart-placeholder">
+                    <p>Equity Curve</p>
+                    <p style="font-size: 0.9em; margin-top: 10px;">Chart visualization would be displayed here using a charting library like Chart.js</p>
+                </div>
+            </div>
+
+            <div id="tradesTab" class="tab-content">
+                <div id="tradesContent"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Load strategies and risk configs on page load
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadStrategies();
+            await loadRiskConfigs();
+        });
+
+        async function loadStrategies() {
+            try {
+                const response = await fetch('/api/strategies/');
+                const strategies = await response.json();
+
+                const select = document.getElementById('strategy');
+                strategies.forEach(strategy => {
+                    const option = document.createElement('option');
+                    option.value = strategy.name;
+                    option.textContent = strategy.name;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading strategies:', error);
+            }
+        }
+
+        async function loadRiskConfigs() {
+            try {
+                const response = await fetch('/api/risk-configs/');
+                const configs = await response.json();
+
+                const select = document.getElementById('riskConfig');
+                configs.forEach(config => {
+                    const option = document.createElement('option');
+                    option.value = config.name;
+                    option.textContent = config.name;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading risk configs:', error);
+            }
+        }
+
+        document.getElementById('backtestForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            // Hide previous results and errors
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+
+            // Get form data
+            const symbols = document.getElementById('symbols').value
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s.length > 0);
+
+            const data = {
+                strategy_name: document.getElementById('strategy').value,
+                risk_config_name: document.getElementById('riskConfig').value,
+                start_date: document.getElementById('startDate').value,
+                end_date: document.getElementById('endDate').value,
+                initial_capital: parseFloat(document.getElementById('capital').value),
+                symbols: symbols.length > 0 ? symbols : null
+            };
+
+            try {
+                const response = await fetch('/api/backtest/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Backtest failed');
+                }
+
+                displayResults(result);
+
+            } catch (error) {
+                document.getElementById('error').textContent = 'Error: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        });
+
+        function displayResults(result) {
+            const metrics = result.metrics;
+            const grid = document.getElementById('metricsGrid');
+            grid.innerHTML = '';
+
+            const metricsToDisplay = [
+                { label: 'Total Return', value: metrics.total_return, suffix: '%', colorize: true },
+                { label: 'CAGR', value: metrics.cagr, suffix: '%', colorize: true },
+                { label: 'Max Drawdown', value: metrics.max_drawdown, suffix: '%', colorize: false },
+                { label: 'Sharpe Ratio', value: metrics.sharpe_ratio, suffix: '', colorize: false },
+                { label: 'Volatility', value: metrics.volatility, suffix: '%', colorize: false },
+                { label: 'Win Rate', value: metrics.win_rate, suffix: '%', colorize: false },
+                { label: 'Num Trades', value: metrics.num_trades, suffix: '', colorize: false },
+                { label: 'Final Equity', value: metrics.final_equity, suffix: '', prefix: '$', colorize: false }
+            ];
+
+            metricsToDisplay.forEach(metric => {
+                const div = document.createElement('div');
+                div.className = 'metric';
+
+                const label = document.createElement('div');
+                label.className = 'metric-label';
+                label.textContent = metric.label;
+
+                const value = document.createElement('div');
+                value.className = 'metric-value';
+
+                if (metric.colorize && metric.value > 0) {
+                    value.classList.add('positive');
+                } else if (metric.colorize && metric.value < 0) {
+                    value.classList.add('negative');
+                }
+
+                const formattedValue = typeof metric.value === 'number'
+                    ? metric.value.toFixed(2)
+                    : metric.value;
+
+                value.textContent = `${metric.prefix || ''}${formattedValue}${metric.suffix}`;
+
+                div.appendChild(label);
+                div.appendChild(value);
+                grid.appendChild(div);
+            });
+
+            document.getElementById('results').style.display = 'block';
+        }
+
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(tabName + 'Tab').classList.add('active');
+        }
+    </script>
+</body>
+</html>

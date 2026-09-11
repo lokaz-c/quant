@@ -2,14 +2,9 @@
 
 > **A production-grade algorithmic trading platform** for backtesting strategies, managing risk, and analyzing performance across market conditions.
 
-[![Live Demo](https://img.shields.io/badge/demo-live-success)](https://github.com/lokaz-c/quant)
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-
-<div align="center">
-  <img src="https://via.placeholder.com/800x400/667eea/ffffff?text=Quant+Portfolio+Simulator" alt="Quant Portfolio Simulator Banner" width="100%"/>
-</div>
 
 ---
 
@@ -36,10 +31,6 @@ docker-compose up --build
 # Access the app
 open http://localhost:5000
 ```
-
-<div align="center">
-  <img src="https://via.placeholder.com/600x300/764ba2/ffffff?text=Web+Interface+Screenshot" alt="Web Interface" width="80%"/>
-</div>
 
 ---
 

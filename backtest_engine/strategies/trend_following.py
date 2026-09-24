@@ -82,7 +82,8 @@ class TrendFollowing(StrategyBase):
                 position = portfolio.positions[symbol]
 
                 # Trailing stop based on ATR
-                stop_price = current_price - (latest['atr'] * self.atr_multiplier)
+                # Chandelier-style stop: trail below the lookback high, not the current price
+                stop_price = latest['highest'] - (latest['atr'] * self.atr_multiplier)
 
                 if current_price < latest['lowest'] or current_price < stop_price:
                     orders.append(Order(

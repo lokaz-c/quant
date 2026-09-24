@@ -63,7 +63,7 @@ def test_max_portfolio_exposure():
 
     # Try to buy another 30% (would exceed 70% limit)
     order2 = Order(symbol='GOOGL', quantity=200, side='buy')
-    is_valid = risk_manager.validate_order(order2, price=150.0, portfolio)
+    is_valid = risk_manager.validate_order(order2, 150.0, portfolio)
 
     # Should still be valid but adjusted
     assert is_valid is True
@@ -158,7 +158,7 @@ def test_risk_disabled():
 
     # Try to buy 80% of portfolio (would violate if enabled)
     order = Order(symbol='AAPL', quantity=800, side='buy')
-    is_valid = risk_manager.validate_order(order, price=100.0, portfolio)
+    is_valid = risk_manager.validate_order(order, 100.0, portfolio)
 
     # Should pass since risk is disabled
     assert is_valid is True

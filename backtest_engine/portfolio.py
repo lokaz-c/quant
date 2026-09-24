@@ -98,16 +98,16 @@ class Portfolio:
             if symbol in prices:
                 position.current_price = prices[symbol]
 
-    def execute_order(self, order: Order, current_price: float, timestamp: datetime) -> bool:
+    def execute_order(self, order: Order, price: float, timestamp: datetime) -> bool:
         """
         Execute a trade order
 
         Returns True if executed, False otherwise
         """
         if order.side == 'buy':
-            return self._execute_buy(order, current_price, timestamp)
+            return self._execute_buy(order, price, timestamp)
         elif order.side == 'sell':
-            return self._execute_sell(order, current_price, timestamp)
+            return self._execute_sell(order, price, timestamp)
         return False
 
     def _execute_buy(self, order: Order, price: float, timestamp: datetime) -> bool:

@@ -1,18 +1,41 @@
 """
-Data loader for historical market data
-Supports loading OHLCV data from CSV files
+OHLCV data: a CSV loader, and the generator for the synthetic sample dataset.
+
+The bundled data/sample_data.csv is synthetic. It is written by
+generate_sample_data(): a seeded Markov chain switches between bull, bear and
+sideways regimes (config/data_generator.json), and each symbol's closes follow
+a geometric Brownian motion with that regime's drift and volatility. Ticker
+names are labels only. Regenerate it with:
+
+    python -m backtest_engine.data_loader
 """
+import argparse
 import zlib
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
 
+from .regimes import DEFAULT_CONFIG_PATH, RegimeModel
+
 DEFAULT_SEED = 42
+DEFAULT_START = '2020-01-01'
+DEFAULT_END = '2024-12-31'
+DEFAULT_OUTPUT = 'data/sample_data.csv'
+DEFAULT_SYMBOLS = [
+    'AAPL', 'ABNB', 'ADBE', 'AMD', 'AMZN', 'BABA', 'COIN', 'CRM', 'CSCO', 'DIS',
+    'GOOGL', 'INTC', 'JPM', 'MA', 'META', 'MSFT', 'NFLX', 'NVDA', 'ORCL', 'PYPL',
+    'SHOP', 'SQ', 'TSLA', 'UBER', 'V',
+]
+
+# Separate random streams for the shared regime path and for each symbol
+_REGIME_STREAM = 0
+_SYMBOL_STREAM = 1
 
 
 class DataLoader:
-    """Loads and manages historical market data"""
+    """Loads OHLCV bars from a CSV file (columns: timestamp, symbol, open, high, low, close, volume)"""
 
     def __init__(self, data_path: str):
         self.data_path = data_path
@@ -20,9 +43,10 @@ class DataLoader:
 
     def load_csv(self, symbols: Optional[List[str]] = None) -> pd.DataFrame:
         """
-        Load historical data from CSV file
+        Load bars from the CSV file, optionally only for some symbols
 
-        Expected CSV columns: timestamp, symbol, open, high, low, close, volume
+        Expected CSV columns: timestamp, symbol, open, high, low, close, volume.
+        Extra columns (the sample data has a `regime` column) are kept.
         """
         df = pd.read_csv(self.data_path)
 
@@ -79,99 +103,87 @@ def symbol_rng(symbol: str, seed: int = DEFAULT_SEED) -> np.random.Generator:
     The built-in hash() of a str is salted per process (PYTHONHASHSEED), so it
     cannot be used as a seed; crc32 of the UTF-8 bytes is fixed.
     """
-    return np.random.default_rng([seed, zlib.crc32(symbol.encode('utf-8'))])
+    return np.random.default_rng([seed, _SYMBOL_STREAM, zlib.crc32(symbol.encode('utf-8'))])
+
+
+def regime_rng(seed: int = DEFAULT_SEED) -> np.random.Generator:
+    """Random generator for the market-wide regime path."""
+    return np.random.default_rng([seed, _REGIME_STREAM])
 
 
 def generate_sample_data(
-    symbols: List[str],
+    symbols: Sequence[str],
     start_date: str,
     end_date: str,
-    output_path: Optional[str] = None,
-    regime: str = 'mixed',
+    output_path: Optional[Union[str, Path]] = None,
+    regime: str = 'markov',
     seed: int = DEFAULT_SEED,
+    model: Optional[RegimeModel] = None,
 ) -> pd.DataFrame:
     """
-    Generate synthetic OHLCV data. Same arguments and seed -> identical output.
+    Generate synthetic daily OHLCV bars. Same arguments and seed -> identical output.
+
+    One regime path is simulated for the whole market and shared by every
+    symbol; each symbol then draws its own GBM shocks, start price, intraday
+    range and volume from its own generator.
 
     Args:
-        symbols: List of ticker symbols (labels only; prices are simulated)
-        start_date: Start date (YYYY-MM-DD)
-        end_date: End date (YYYY-MM-DD)
-        output_path: Optional path to save CSV
-        regime: Market regime - 'bullish', 'bearish', 'sideways', or 'mixed'
-        seed: Base seed, combined with each symbol's crc32
+        symbols: Ticker symbols (labels only; prices are simulated)
+        start_date: First date (YYYY-MM-DD); bars are on business days
+        end_date: Last date (YYYY-MM-DD)
+        output_path: Optional path to write the CSV to
+        regime: 'markov' to switch regimes with the Markov chain, or a regime
+            name from the config (e.g. 'bull') to stay in that regime
+        seed: Base seed for the regime path and every symbol
+        model: Regime model; defaults to config/data_generator.json
+
+    Returns:
+        DataFrame sorted by timestamp then symbol, with columns
+        timestamp, symbol, open, high, low, close, volume, regime
     """
-    start = pd.to_datetime(start_date)
-    end = pd.to_datetime(end_date)
+    if not symbols:
+        raise ValueError('At least one symbol is required')
+    model = model or RegimeModel.from_json(DEFAULT_CONFIG_PATH)
 
-    # Generate date range (trading days only)
-    dates = pd.date_range(start, end, freq='B')  # B = business days
+    dates = pd.date_range(pd.to_datetime(start_date), pd.to_datetime(end_date), freq='B')
+    n = len(dates)
+    if n == 0:
+        raise ValueError(f'No business days between {start_date} and {end_date}')
 
-    all_data = []
+    if regime == 'markov':
+        path = model.simulate(n, regime_rng(seed))
+    else:
+        path = np.full(n, model.index_of(regime), dtype=np.int64)
+    regime_labels = np.asarray(model.names, dtype=object)[path]
 
+    frames = []
     for symbol in symbols:
         rng = symbol_rng(symbol, seed)
+        start_price = rng.uniform(*model.initial_price_range)
+        log_returns = model.daily_log_returns(path, rng)
+        log_returns[0] = 0.0  # the first close is the start price
+        close = start_price * np.exp(np.cumsum(log_returns))
 
-        # Initial price
-        price = rng.uniform(50, 200)
-        prices = [price]
+        # Intraday range of 1-3% of the close; high and low inside it, open between them
+        daily_range = close * rng.uniform(0.01, 0.03, n)
+        high = close + rng.uniform(0.0, 1.0, n) * daily_range
+        low = close - rng.uniform(0.0, 1.0, n) * daily_range
+        open_price = low + rng.uniform(0.0, 1.0, n) * (high - low)
+        volume = rng.integers(100_000, 10_000_000, n)
 
-        # Generate price series based on regime
-        for i in range(1, len(dates)):
-            if regime == 'bullish':
-                drift = 0.0008  # Upward drift
-                volatility = 0.015
-            elif regime == 'bearish':
-                drift = -0.0006  # Downward drift
-                volatility = 0.020
-            elif regime == 'sideways':
-                drift = 0.0001  # Minimal drift
-                volatility = 0.012
-            else:  # mixed
-                # Change regime periodically
-                period = i // 60
-                if period % 3 == 0:
-                    drift = 0.0008
-                    volatility = 0.015
-                elif period % 3 == 1:
-                    drift = -0.0004
-                    volatility = 0.018
-                else:
-                    drift = 0.0001
-                    volatility = 0.012
+        frames.append(pd.DataFrame({
+            'timestamp': dates,
+            'symbol': symbol,
+            'open': np.round(open_price, 2),
+            'high': np.round(high, 2),
+            'low': np.round(low, 2),
+            'close': np.round(close, 2),
+            'volume': volume,
+            'regime': regime_labels,
+        }))
 
-            # Geometric Brownian Motion
-            change = drift + volatility * rng.standard_normal()
-            price = price * (1 + change)
-            prices.append(price)
-
-        # Generate OHLCV data
-        for i, date in enumerate(dates):
-            close = prices[i]
-            daily_range = close * rng.uniform(0.01, 0.03)
-
-            high = close + rng.uniform(0, daily_range)
-            low = close - rng.uniform(0, daily_range)
-            open_price = rng.uniform(low, high)
-
-            # Ensure OHLC relationships
-            high = max(high, open_price, close)
-            low = min(low, open_price, close)
-
-            volume = int(rng.integers(100000, 10000000))
-
-            all_data.append({
-                'timestamp': date,
-                'symbol': symbol,
-                'open': round(open_price, 2),
-                'high': round(high, 2),
-                'low': round(low, 2),
-                'close': round(close, 2),
-                'volume': volume
-            })
-
-    df = pd.DataFrame(all_data)
-    df = df.sort_values(['timestamp', 'symbol']).reset_index(drop=True)
+    df = pd.concat(frames, ignore_index=True)
+    df = df.sort_values(['timestamp', 'symbol'], kind='mergesort').reset_index(drop=True)
 
     if output_path:
         df.to_csv(output_path, index=False)
@@ -179,15 +191,27 @@ def generate_sample_data(
     return df
 
 
-if __name__ == '__main__':
-    # Generate sample data
-    symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA']
-    output_path = 'data/sample_data.csv'
+def main(argv: Optional[List[str]] = None) -> None:
+    parser = argparse.ArgumentParser(
+        description='Write the synthetic sample dataset (Markov regime-switching GBM).')
+    parser.add_argument('--symbols', default=','.join(DEFAULT_SYMBOLS),
+                        help='comma-separated tickers (labels only)')
+    parser.add_argument('--start', default=DEFAULT_START)
+    parser.add_argument('--end', default=DEFAULT_END)
+    parser.add_argument('--seed', type=int, default=DEFAULT_SEED)
+    parser.add_argument('--regime', default='markov',
+                        help="'markov' or a regime name from the config to hold fixed")
+    parser.add_argument('--config', default=str(DEFAULT_CONFIG_PATH))
+    parser.add_argument('--output', default=DEFAULT_OUTPUT)
+    args = parser.parse_args(argv)
 
-    generate_sample_data(
-        symbols=symbols,
-        start_date='2022-01-01',
-        end_date='2024-12-31',
-        output_path=output_path,
-        regime='mixed'
-    )
+    symbols = [s.strip() for s in args.symbols.split(',') if s.strip()]
+    df = generate_sample_data(symbols, args.start, args.end, output_path=args.output,
+                              regime=args.regime, seed=args.seed,
+                              model=RegimeModel.from_json(args.config))
+    print(f'Wrote {len(df)} rows ({len(symbols)} symbols, {args.start} to {args.end}, '
+          f'seed {args.seed}) to {args.output}')
+
+
+if __name__ == '__main__':
+    main()

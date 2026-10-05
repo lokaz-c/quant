@@ -134,3 +134,19 @@ def test_empty_data():
     assert metrics.total_return() == 0.0
     assert metrics.max_drawdown() == 0.0
     assert metrics.num_trades() == 0
+
+
+def test_returns_by_regime_attributes_each_day_to_its_regime():
+    from backtest_engine.metrics import returns_by_regime
+
+    dates = [datetime(2024, 1, d) for d in (1, 2, 3, 4)]
+    equity_curve = [{'timestamp': d, 'equity': e} for d, e in zip(dates, [100.0, 110.0, 99.0, 99.0])]
+    regimes = {dates[0]: 'bull', dates[1]: 'bull', dates[2]: 'bear', dates[3]: 'bear'}
+
+    result = returns_by_regime(equity_curve, regimes, regime_order=['bull', 'bear', 'sideways'])
+
+    assert list(result) == ['bull', 'bear']  # no days in sideways, so no entry
+    assert result['bull']['days'] == 1
+    assert result['bull']['compounded_return_pct'] == pytest.approx(10.0)
+    assert result['bear']['days'] == 2
+    assert result['bear']['compounded_return_pct'] == pytest.approx(-10.0)

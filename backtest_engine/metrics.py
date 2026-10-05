@@ -4,7 +4,7 @@ Computes various trading performance metrics
 """
 import numpy as np
 import pandas as pd
-from typing import List, Dict
+from typing import Dict, List, Mapping, Optional, Sequence
 from datetime import datetime
 
 
@@ -251,3 +251,50 @@ class PerformanceMetrics:
         df['monthly_return'] = df['equity'].pct_change() * 100
 
         return df[['equity', 'monthly_return']]
+
+
+def returns_by_regime(
+    equity_curve: List[Dict],
+    regime_by_date: Mapping,
+    regime_order: Optional[Sequence[str]] = None,
+    trading_days_per_year: int = 252,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Split a backtest's daily returns by the market regime of each day.
+
+    The return from close t-1 to close t is attributed to day t's regime,
+    which is the regime the generator used for that day's price move.
+
+    Args:
+        equity_curve: [{'timestamp': ..., 'equity': ...}, ...] in time order
+        regime_by_date: timestamp -> regime name (from the data's regime column)
+        regime_order: optional output order (e.g. the config's regime order)
+
+    Returns:
+        {regime: {'days', 'compounded_return_pct', 'annualized_mean_return_pct',
+                  'annualized_volatility_pct'}}
+    """
+    if len(equity_curve) < 2:
+        return {}
+
+    df = pd.DataFrame(equity_curve)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    labels = {pd.Timestamp(k): v for k, v in regime_by_date.items()}
+    df['daily_return'] = df['equity'].pct_change()
+    df['regime'] = df['timestamp'].map(labels)
+    df = df.dropna(subset=['daily_return', 'regime'])
+
+    names = list(regime_order) if regime_order else sorted(df['regime'].unique())
+    result = {}
+    for name in names:
+        returns = df.loc[df['regime'] == name, 'daily_return']
+        if returns.empty:
+            continue
+        volatility = returns.std(ddof=1) * np.sqrt(trading_days_per_year) if len(returns) > 1 else 0.0
+        result[name] = {
+            'days': int(len(returns)),
+            'compounded_return_pct': float(((1 + returns).prod() - 1) * 100),
+            'annualized_mean_return_pct': float(returns.mean() * trading_days_per_year * 100),
+            'annualized_volatility_pct': float(volatility * 100),
+        }
+    return result

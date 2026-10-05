@@ -107,6 +107,12 @@
             font-size: 1rem;
         }
 
+        .data-note {
+            color: var(--text-tertiary);
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+
         /* ===== CONTROL PANEL ===== */
         .control-panel {
             background: var(--bg-secondary);
@@ -504,7 +510,8 @@
         <!-- Page Header -->
         <div class="page-header">
             <h1 class="page-title">Portfolio Backtesting</h1>
-            <p class="page-subtitle">Quantitative strategy performance analysis</p>
+            <p class="page-subtitle">Strategy backtests with and without a risk layer</p>
+            <p class="data-note">Prices are synthetic: a seeded Markov regime-switching GBM (data/sample_data.csv). Ticker names are labels only.</p>
         </div>
 
         <!-- Control Panel -->
@@ -818,9 +825,24 @@
             // Show results
             document.getElementById('results').classList.add('active');
 
-            // Render charts (placeholder data for now)
-            renderEquityChart();
-            renderDrawdownChart();
+            // Charts use the stored equity curve for this run
+            loadCharts(result.backtest_id);
+        }
+
+        async function loadCharts(backtestId) {
+            try {
+                const response = await fetch(`/api/backtest/${backtestId}`);
+                const run = await response.json();
+                if (!response.ok) {
+                    throw new Error(run.error || 'Could not load the equity curve');
+                }
+                renderEquityChart(run.equity_curve);
+                renderDrawdownChart(run.equity_curve);
+            } catch (error) {
+                const errorEl = document.getElementById('error');
+                errorEl.textContent = error.message;
+                errorEl.classList.add('active');
+            }
         }
 
         function updateMetric(id, value, suffix, colorize, prefix = '') {
@@ -839,22 +861,20 @@
             }
         }
 
-        function renderEquityChart() {
+        function renderEquityChart(curve) {
             const ctx = document.getElementById('equityChart').getContext('2d');
 
             if (equityChartInstance) {
                 equityChartInstance.destroy();
             }
 
-            // Placeholder data - replace with actual equity curve data
-            const data = Array.from({length: 20}, (_, i) => ({
-                x: i,
-                y: 100000 + Math.random() * 5000 * i
-            }));
+            const labels = curve.map(point => point.timestamp.slice(0, 10));
+            const data = curve.map(point => point.equity);
 
             equityChartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
+                    labels: labels,
                     datasets: [{
                         label: 'Equity',
                         data: data,
@@ -862,7 +882,7 @@
                         backgroundColor: 'rgba(59, 130, 246, 0.1)',
                         borderWidth: 2,
                         fill: true,
-                        tension: 0.4,
+                        tension: 0,
                         pointRadius: 0
                     }]
                 },
@@ -876,7 +896,14 @@
                     },
                     scales: {
                         x: {
-                            display: false
+                            ticks: {
+                                color: '#6a6a6a',
+                                maxTicksLimit: 6,
+                                maxRotation: 0
+                            },
+                            grid: {
+                                display: false
+                            }
                         },
                         y: {
                             grid: {
@@ -895,22 +922,25 @@
             });
         }
 
-        function renderDrawdownChart() {
+        function renderDrawdownChart(curve) {
             const ctx = document.getElementById('drawdownChart').getContext('2d');
 
             if (drawdownChartInstance) {
                 drawdownChartInstance.destroy();
             }
 
-            // Placeholder data - replace with actual drawdown data
-            const data = Array.from({length: 20}, (_, i) => ({
-                x: i,
-                y: -Math.random() * 15
-            }));
+            // Drawdown from the running peak, in percent (0 at new highs)
+            const labels = curve.map(point => point.timestamp.slice(0, 10));
+            let peak = -Infinity;
+            const data = curve.map(point => {
+                peak = Math.max(peak, point.equity);
+                return (point.equity / peak - 1) * 100;
+            });
 
             drawdownChartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
+                    labels: labels,
                     datasets: [{
                         label: 'Drawdown',
                         data: data,
@@ -918,7 +948,7 @@
                         backgroundColor: 'rgba(239, 68, 68, 0.1)',
                         borderWidth: 2,
                         fill: true,
-                        tension: 0.4,
+                        tension: 0,
                         pointRadius: 0
                     }]
                 },
@@ -932,7 +962,14 @@
                     },
                     scales: {
                         x: {
-                            display: false
+                            ticks: {
+                                color: '#6a6a6a',
+                                maxTicksLimit: 6,
+                                maxRotation: 0
+                            },
+                            grid: {
+                                display: false
+                            }
                         },
                         y: {
                             grid: {
@@ -945,7 +982,7 @@
                                     size: 11
                                 },
                                 callback: function(value) {
-                                    return value + '%';
+                                    return value.toFixed(1) + '%';
                                 }
                             }
                         }

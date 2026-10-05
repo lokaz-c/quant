@@ -36,7 +36,8 @@ class RiskManager:
         if not self.config.enabled:
             return True
 
-        if self.trading_halted:
+        # A drawdown halt stops new entries; exits must still go through
+        if self.trading_halted and order.side == 'buy':
             return False
 
         if order.side == 'buy':

@@ -90,7 +90,7 @@ Total return, CAGR, max drawdown, annualised volatility, Sharpe (2% risk-free), 
 
 ## Tests and CI
 
-83 pytest tests cover the data generator (cross-process determinism, Markov transition frequencies and regime durations), strategies, metrics, portfolio accounting, risk rules, the Flask API and the paper-trading adapter. GitHub Actions runs them on Python 3.10 and 3.11; mypy runs on the engine as an advisory step.
+84 pytest tests cover the data generator (cross-process determinism, Markov transition frequencies and regime durations), strategies, metrics, portfolio accounting, risk rules, the Flask API and the paper-trading adapter. GitHub Actions runs them on Python 3.10 and 3.11; mypy runs on the engine as an advisory step.
 
 ```bash
 pytest                     # or: make test

@@ -1,0 +1,240 @@
+"""
+Benchmark backtests -> docs/results.md
+
+Runs every strategy without the risk layer and under each risk profile in
+config/risk_configs.json, on a fixed slice of the synthetic sample data, and
+writes a Markdown report. Nothing in the run is random and the report has no
+timestamps, so re-running it produces the same file byte for byte.
+
+    make results        # or: python -m scripts.results
+"""
+import argparse
+import contextlib
+import hashlib
+import io
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence
+
+import pandas as pd
+
+from backtest_engine.backtester import Backtester
+from backtest_engine.data_loader import DEFAULT_SEED, DataLoader
+from backtest_engine.metrics import returns_by_regime
+from backtest_engine.regimes import DEFAULT_CONFIG_PATH, RegimeModel
+from backtest_engine.risk import RiskConfig
+from backtest_engine.strategies.moving_average import MovingAverageCrossover
+from backtest_engine.strategies.rsi_strategy import RSIMeanReversion
+from backtest_engine.strategies.trend_following import TrendFollowing
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+COMMAND = 'make results'
+
+STRATEGIES = {
+    'Moving Average Crossover': MovingAverageCrossover,
+    'RSI Mean Reversion': RSIMeanReversion,
+    'Trend Following': TrendFollowing,
+}
+
+
+@dataclass(frozen=True)
+class BenchmarkConfig:
+    data_path: Path = REPO_ROOT / 'data' / 'sample_data.csv'
+    symbols: Sequence[str] = ('AAPL', 'AMZN', 'GOOGL', 'JPM', 'MSFT')
+    start_date: str = '2020-01-01'
+    end_date: str = '2024-12-31'
+    initial_capital: float = 100_000.0
+    strategies: Sequence[str] = tuple(STRATEGIES)
+    # None = every profile in config/risk_configs.json, the baseline first
+    risk_profiles: Optional[Sequence[str]] = None
+
+
+@dataclass
+class Run:
+    strategy: str
+    risk_profile: str
+    metrics: Dict
+    by_regime: Dict = field(default_factory=dict)
+
+
+def load_risk_profiles(names: Optional[Sequence[str]] = None) -> List[RiskConfig]:
+    with open(REPO_ROOT / 'config' / 'risk_configs.json') as f:
+        raw = json.load(f).values()
+    profiles = [RiskConfig(**entry) for entry in raw]
+    profiles.sort(key=lambda p: p.enabled)  # baseline (risk layer off) first, then file order
+    if names is not None:
+        profiles = [p for p in profiles if p.name in names]
+    return profiles
+
+
+def run_benchmarks(config: BenchmarkConfig) -> List[Run]:
+    data = DataLoader(str(config.data_path)).load_csv(list(config.symbols))
+    data = data[(data['timestamp'] >= config.start_date) & (data['timestamp'] <= config.end_date)]
+    regime_by_date = data.drop_duplicates('timestamp').set_index('timestamp')['regime'].to_dict()
+    regime_order = RegimeModel.from_json(DEFAULT_CONFIG_PATH).names
+
+    runs = []
+    for strategy_name in config.strategies:
+        for profile in load_risk_profiles(config.risk_profiles):
+            backtester = Backtester(
+                strategy=STRATEGIES[strategy_name](),
+                data_loader=DataLoader(str(config.data_path)),
+                initial_capital=config.initial_capital,
+                risk_config=profile,
+                start_date=config.start_date,
+                end_date=config.end_date,
+                symbols=list(config.symbols),
+            )
+            with contextlib.redirect_stdout(io.StringIO()):  # the engine prints progress
+                results = backtester.run()
+            runs.append(Run(
+                strategy=strategy_name,
+                risk_profile=profile.name,
+                metrics=results['metrics'],
+                by_regime=returns_by_regime(results['equity_curve'], regime_by_date, regime_order),
+            ))
+    return runs
+
+
+def _pct(value: float) -> str:
+    return f'{value:.2f}%'
+
+
+def _signed_pct(value: float) -> str:
+    return f'{value:+.2f}'
+
+
+def _fmt_opt(value: Optional[float]) -> str:
+    return '-' if value is None else f'{value * 100:g}%'
+
+
+def render(config: BenchmarkConfig, runs: List[Run]) -> str:
+    data_bytes = Path(config.data_path).read_bytes()
+    data = DataLoader(str(config.data_path)).load_csv(list(config.symbols))
+    data = data[(data['timestamp'] >= config.start_date) & (data['timestamp'] <= config.end_date)]
+    n_bars = data['timestamp'].nunique()
+    regime_days = data.drop_duplicates('timestamp')['regime'].value_counts()
+    model = RegimeModel.from_json(DEFAULT_CONFIG_PATH)
+    profiles = load_risk_profiles(config.risk_profiles)
+
+    lines = [
+        '# Benchmark backtest results',
+        '',
+        '**The data is synthetic.** Prices come from a seeded Markov regime-switching '
+        'geometric Brownian motion, not from any market. These numbers show how the engine '
+        'and the risk layer behave on one simulated path; they say nothing about how the '
+        'strategies would do on real prices.',
+        '',
+        f'Generated by `{COMMAND}` (`python -m scripts.results`). Nothing in the run is random '
+        'and the file has no timestamps, so re-running the command reproduces it byte for byte. '
+        'CI regenerates it and fails if it differs from the committed copy.',
+        '',
+        '## Setup',
+        '',
+        f'- Data: `{Path(config.data_path).relative_to(REPO_ROOT)}` '
+        f'(sha256 `{hashlib.sha256(data_bytes).hexdigest()[:16]}...`), written by '
+        f'`python -m backtest_engine.data_loader` with seed {DEFAULT_SEED} and the regime model in '
+        '`config/data_generator.json`',
+        f'- Symbols: {", ".join(config.symbols)} (labels only)',
+        f'- Period: {config.start_date} to {config.end_date}, {n_bars:,} daily bars (business days)',
+        f'- Days per regime in this period: '
+        + ', '.join(f'{name} {int(regime_days.get(name, 0)):,}' for name in model.names),
+        f'- Initial capital: ${config.initial_capital:,.0f}. Orders fill at the signal bar\'s close; '
+        'no commissions, slippage or partial fills. Long only.',
+        '- Strategy parameters (code defaults): MA crossover 20/50; RSI 14 with 30/70 thresholds; '
+        'Trend Following 20-day channel with a 2 x ATR(14) chandelier stop. Each new position is '
+        '20% of equity before risk caps.',
+        '- Sharpe uses daily returns, a 2% annual risk-free rate and sqrt(252) annualisation. '
+        'Idle cash earns no interest, which lowers Sharpe for strategies that sit in cash.',
+        '',
+        'Risk profiles (`config/risk_configs.json`):',
+        '',
+        '| Profile | Risk layer | Max position | Max exposure | Stop-loss | Take-profit | Halt at drawdown |',
+        '| --- | --- | --- | --- | --- | --- | --- |',
+    ]
+    for p in profiles:
+        if p.enabled:
+            lines.append(f'| {p.name} | on | {_fmt_opt(p.max_position_size)} | {_fmt_opt(p.max_portfolio_exposure)} | '
+                         f'{_fmt_opt(p.stop_loss_pct)} | {_fmt_opt(p.take_profit_pct)} | {_fmt_opt(p.max_drawdown_pct)} |')
+        else:
+            lines.append(f'| {p.name} | off | - | - | - | - | - |')
+
+    lines += [
+        '',
+        '## Results',
+        '',
+        '| Strategy | Risk profile | Total return | CAGR | Max drawdown | Volatility | Sharpe | Trades | Win rate |',
+        '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    ]
+    for r in runs:
+        m = r.metrics
+        lines.append(
+            f'| {r.strategy} | {r.risk_profile} | {_pct(m["total_return"])} | {_pct(m["cagr"])} | '
+            f'{_pct(m["max_drawdown"])} | {_pct(m["volatility"])} | {m["sharpe_ratio"]:.2f} | '
+            f'{m["num_trades"]} | {_pct(m["win_rate"])} |'
+        )
+
+    baseline_name = next((p.name for p in profiles if not p.enabled), None)
+    managed = [p.name for p in profiles if p.enabled]
+    if baseline_name and managed:
+        lines += [
+            '',
+            '## Risk layer vs. baseline',
+            '',
+            f'Change against the same strategy with the risk layer off ({baseline_name}), in percentage '
+            'points. A negative max-drawdown change means a shallower drawdown.',
+            '',
+            '| Strategy | Risk profile | Total return change | Max drawdown change | Sharpe change |',
+            '| --- | --- | ---: | ---: | ---: |',
+        ]
+        by_key = {(r.strategy, r.risk_profile): r.metrics for r in runs}
+        for strategy in config.strategies:
+            base = by_key.get((strategy, baseline_name))
+            if base is None:
+                continue
+            for name in managed:
+                m = by_key.get((strategy, name))
+                if m is None:
+                    continue
+                lines.append(
+                    f'| {strategy} | {name} | {_signed_pct(m["total_return"] - base["total_return"])} | '
+                    f'{_signed_pct(m["max_drawdown"] - base["max_drawdown"])} | '
+                    f'{m["sharpe_ratio"] - base["sharpe_ratio"]:+.2f} |'
+                )
+
+    if baseline_name:
+        lines += [
+            '',
+            '## Returns by regime (risk layer off)',
+            '',
+            'Each daily portfolio return is attributed to that day\'s regime label from the data '
+            '(`metrics.returns_by_regime`). Compounded return over the days spent in each regime.',
+            '',
+            '| Strategy | ' + ' | '.join(model.names) + ' |',
+            '| --- |' + ' ---: |' * len(model.names),
+        ]
+        for r in runs:
+            if r.risk_profile != baseline_name:
+                continue
+            cells = [_pct(r.by_regime[name]['compounded_return_pct']) if name in r.by_regime else '-'
+                     for name in model.names]
+            lines.append(f'| {r.strategy} | ' + ' | '.join(cells) + ' |')
+
+    return '\n'.join(lines) + '\n'
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0].strip())
+    parser.add_argument('--output', default=str(REPO_ROOT / 'docs' / 'results.md'))
+    args = parser.parse_args(argv)
+
+    config = BenchmarkConfig()
+    report = render(config, run_benchmarks(config))
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.output).write_text(report)
+    print(f'Wrote {args.output}')
+
+
+if __name__ == '__main__':
+    main()

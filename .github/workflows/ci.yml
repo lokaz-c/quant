@@ -34,6 +34,13 @@ jobs:
     - name: Run tests
       run: pytest --cov=backtest_engine --cov=app --cov=live_trading
 
+    # docs/results.md is generated; fail if the committed copy no longer matches the code
+    - name: Check docs/results.md is up to date
+      if: matrix.python-version == '3.11'
+      run: |
+        python -m scripts.results
+        git diff --exit-code docs/results.md
+
     # Advisory until the engine is fully annotated; shows as a warning, does not fail the job
     - name: Type check (mypy, advisory)
       continue-on-error: true

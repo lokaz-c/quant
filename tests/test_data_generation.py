@@ -7,7 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from backtest_engine.data_loader import generate_sample_data
+from backtest_engine.data_loader import (
+    DEFAULT_END, DEFAULT_SEED, DEFAULT_START, DEFAULT_SYMBOLS, generate_sample_data,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -15,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DIGEST_SCRIPT = """
 import hashlib
 from backtest_engine.data_loader import generate_sample_data
-df = generate_sample_data(['AAPL', 'MSFT', 'TSLA'], '2022-01-03', '2022-06-30', seed=7)
+df =generate_sample_data(['AAPL', 'MSFT', 'TSLA'], '2022-01-03', '2022-06-30', seed=7)
 print(hashlib.sha256(df.to_csv(index=False).encode()).hexdigest())
 """
 
@@ -53,3 +55,10 @@ def test_symbol_series_does_not_depend_on_other_symbols():
     together = generate_sample_data(['AAPL', 'MSFT', 'TSLA'], '2022-01-03', '2022-06-30', seed=7)
     msft = together[together['symbol'] == 'MSFT'].reset_index(drop=True)
     assert alone['close'].tolist() == msft['close'].tolist()
+
+
+def test_committed_sample_csv_matches_the_generator():
+    """data/sample_data.csv is exactly `python -m backtest_engine.data_loader` output."""
+    df = generate_sample_data(DEFAULT_SYMBOLS, DEFAULT_START, DEFAULT_END, seed=DEFAULT_SEED)
+    committed = (REPO_ROOT / 'data' / 'sample_data.csv').read_text()
+    assert df.to_csv(index=False) == committed

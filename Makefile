@@ -11,7 +11,7 @@ help:
 	@echo "make restart        - Restart all services"
 	@echo "make logs           - View application logs"
 	@echo "make test           - Run test suite"
-	@echo "make generate-data  - Generate sample market data"
+	@echo "make generate-data  - Regenerate data/sample_data.csv (synthetic, seeded)"
 	@echo "make run-example    - Run example backtest"
 	@echo "make clean          - Clean up containers and volumes"
 	@echo "make shell          - Open shell in web container"
@@ -40,7 +40,7 @@ test-coverage:
 	docker-compose exec web pytest --cov=backtest_engine --cov=app --cov-report=html
 
 generate-data:
-	docker-compose exec web python backtest_engine/data_loader.py
+	python -m backtest_engine.data_loader
 
 run-example:
 	docker-compose exec web python run_example.py
@@ -58,5 +58,5 @@ shell:
 db-shell:
 	docker-compose exec db psql -U quant_user -d quant_db
 
-setup: build up generate-data
+setup: build up
 	@echo "Setup complete! Application is ready at http://localhost:5000"

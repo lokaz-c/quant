@@ -2,10 +2,13 @@
 Data loader for historical market data
 Supports loading OHLCV data from CSV files
 """
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+import zlib
 from typing import List, Optional
+
+import numpy as np
+import pandas as pd
+
+DEFAULT_SEED = 42
 
 
 class DataLoader:
@@ -70,22 +73,33 @@ class DataLoader:
         return True
 
 
+def symbol_rng(symbol: str, seed: int = DEFAULT_SEED) -> np.random.Generator:
+    """Random generator for one symbol, stable across processes and platforms.
+
+    The built-in hash() of a str is salted per process (PYTHONHASHSEED), so it
+    cannot be used as a seed; crc32 of the UTF-8 bytes is fixed.
+    """
+    return np.random.default_rng([seed, zlib.crc32(symbol.encode('utf-8'))])
+
+
 def generate_sample_data(
     symbols: List[str],
     start_date: str,
     end_date: str,
-    output_path: str,
-    regime: str = 'mixed'
+    output_path: Optional[str] = None,
+    regime: str = 'mixed',
+    seed: int = DEFAULT_SEED,
 ) -> pd.DataFrame:
     """
-    Generate sample OHLCV data for testing
+    Generate synthetic OHLCV data. Same arguments and seed -> identical output.
 
     Args:
-        symbols: List of ticker symbols
+        symbols: List of ticker symbols (labels only; prices are simulated)
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
-        output_path: Path to save CSV
+        output_path: Optional path to save CSV
         regime: Market regime - 'bullish', 'bearish', 'sideways', or 'mixed'
+        seed: Base seed, combined with each symbol's crc32
     """
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
@@ -96,10 +110,10 @@ def generate_sample_data(
     all_data = []
 
     for symbol in symbols:
-        np.random.seed(hash(symbol) % 2**32)  # Deterministic but different per symbol
+        rng = symbol_rng(symbol, seed)
 
         # Initial price
-        price = np.random.uniform(50, 200)
+        price = rng.uniform(50, 200)
         prices = [price]
 
         # Generate price series based on regime
@@ -127,24 +141,24 @@ def generate_sample_data(
                     volatility = 0.012
 
             # Geometric Brownian Motion
-            change = drift + volatility * np.random.randn()
+            change = drift + volatility * rng.standard_normal()
             price = price * (1 + change)
             prices.append(price)
 
         # Generate OHLCV data
         for i, date in enumerate(dates):
             close = prices[i]
-            daily_range = close * np.random.uniform(0.01, 0.03)
+            daily_range = close * rng.uniform(0.01, 0.03)
 
-            high = close + np.random.uniform(0, daily_range)
-            low = close - np.random.uniform(0, daily_range)
-            open_price = np.random.uniform(low, high)
+            high = close + rng.uniform(0, daily_range)
+            low = close - rng.uniform(0, daily_range)
+            open_price = rng.uniform(low, high)
 
             # Ensure OHLC relationships
             high = max(high, open_price, close)
             low = min(low, open_price, close)
 
-            volume = np.random.randint(100000, 10000000)
+            volume = int(rng.integers(100000, 10000000))
 
             all_data.append({
                 'timestamp': date,
@@ -159,10 +173,8 @@ def generate_sample_data(
     df = pd.DataFrame(all_data)
     df = df.sort_values(['timestamp', 'symbol']).reset_index(drop=True)
 
-    # Save to CSV
-    df.to_csv(output_path, index=False)
-    print(f"Generated {len(df)} data points for {len(symbols)} symbols")
-    print(f"Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
+    if output_path:
+        df.to_csv(output_path, index=False)
 
     return df
 

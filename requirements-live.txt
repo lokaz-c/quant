@@ -1,0 +1,3 @@
+-r requirements.txt
+# Alpaca paper trading (live_trading/). alpaca-trade-api is archived; alpaca-py is the maintained SDK.
+alpaca-py==0.44.0

@@ -113,7 +113,7 @@ There are 86 pytest tests (`pytest --collect-only -q`). They cover:
 - the paper-trading adapter, with fake clients
 - that the results report is reproducible
 
-GitHub Actions runs the suite on Python 3.10 and 3.11 and checks that `docs/results.md` is current. mypy runs on the engine as an advisory step and does not fail the build.
+Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11, and checks that `docs/results.md` is current. mypy runs on the engine as an advisory step and does not fail the build.
 
 ## Limitations
 

@@ -33,7 +33,7 @@ Local:
 pip install -r requirements.txt
 python init_db.py                         # SQLite by default; set DATABASE_URL for PostgreSQL
 python -m backtest_engine.data_loader     # optional: regenerates data/sample_data.csv
-python -m app.main                        # http://localhost:5000
+python -m app.main                        # http://localhost:8000
 ```
 
 Python 3.11. `make help` lists the other targets (test, generate-data, run-example, db-shell).

@@ -42,4 +42,7 @@ app = create_app()
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Development server only (Docker and Render use gunicorn). Port 8000 because
+    # macOS binds 5000 for AirPlay; the debugger stays off unless FLASK_DEBUG=1.
+    app.run(host='127.0.0.1', port=int(os.getenv('PORT', '8000')),
+            debug=os.getenv('FLASK_DEBUG') == '1')

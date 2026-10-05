@@ -13,7 +13,7 @@ def create_app():
 
     # Configuration
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-    app.config['JSON_SORT_KEYS'] = False
+    app.json.sort_keys = False  # keep response field order (JSON_SORT_KEYS was removed in Flask 2.3)
 
     # Enable CORS
     CORS(app)

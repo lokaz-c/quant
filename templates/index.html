@@ -423,6 +423,14 @@
             border-bottom: none;
         }
 
+        .trades-table td.positive {
+            color: var(--success);
+        }
+
+        .trades-table td.negative {
+            color: var(--danger);
+        }
+
         /* ===== TABS ===== */
         .tabs {
             display: flex;
@@ -658,7 +666,6 @@
                             <thead>
                                 <tr>
                                     <th>Symbol</th>
-                                    <th>Side</th>
                                     <th>Entry</th>
                                     <th>Exit</th>
                                     <th>Qty</th>
@@ -668,7 +675,7 @@
                             </thead>
                             <tbody id="tradesTableBody">
                                 <tr>
-                                    <td colspan="7" style="text-align: center; color: var(--text-tertiary); padding: 2rem;">
+                                    <td colspan="6" style="text-align: center; color: var(--text-tertiary); padding: 2rem;">
                                         No trades to display
                                     </td>
                                 </tr>
@@ -808,7 +815,8 @@
             // Update Performance Metrics
             updateMetric('metric-return', metrics.total_return, '%', true);
             updateMetric('metric-cagr', metrics.cagr, '%', true);
-            updateMetric('metric-equity', metrics.final_equity, '', false, '$');
+            document.getElementById('metric-equity').textContent =
+                '$' + metrics.final_equity.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
             // Update Risk Metrics
             updateMetric('metric-drawdown', metrics.max_drawdown, '%', false);
@@ -817,7 +825,7 @@
 
             // Update Execution Metrics
             updateMetric('metric-winrate', metrics.win_rate, '%', false);
-            updateMetric('metric-trades', metrics.num_trades, '', false);
+            document.getElementById('metric-trades').textContent = String(metrics.num_trades);
 
             const avgWinLoss = `${metrics.avg_win.toFixed(1)} / ${Math.abs(metrics.avg_loss).toFixed(1)}`;
             document.getElementById('metric-avgwin').textContent = avgWinLoss;
@@ -825,11 +833,11 @@
             // Show results
             document.getElementById('results').classList.add('active');
 
-            // Charts use the stored equity curve for this run
-            loadCharts(result.backtest_id);
+            // Charts and trade list come from the stored run
+            loadRunDetails(result.backtest_id);
         }
 
-        async function loadCharts(backtestId) {
+        async function loadRunDetails(backtestId) {
             try {
                 const response = await fetch(`/api/backtest/${backtestId}`);
                 const run = await response.json();
@@ -838,10 +846,46 @@
                 }
                 renderEquityChart(run.equity_curve);
                 renderDrawdownChart(run.equity_curve);
+                renderTrades(run.trades);
             } catch (error) {
                 const errorEl = document.getElementById('error');
                 errorEl.textContent = error.message;
                 errorEl.classList.add('active');
+            }
+        }
+
+        function renderTrades(trades) {
+            const body = document.getElementById('tradesTableBody');
+            body.replaceChildren();
+            if (trades.length === 0) {
+                const row = body.insertRow();
+                const cell = row.insertCell();
+                cell.colSpan = 6;
+                cell.style.textAlign = 'center';
+                cell.style.color = 'var(--text-tertiary)';
+                cell.style.padding = '2rem';
+                cell.textContent = 'No closed trades in this run';
+                return;
+            }
+            const money = value => value.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            // The engine is long-only; each row is a closed round trip
+            for (const t of trades) {
+                const cells = [
+                    t.symbol,
+                    `${t.entry_date.slice(0, 10)} @ ${money(t.entry_price)}`,
+                    t.exit_date ? `${t.exit_date.slice(0, 10)} @ ${money(t.exit_price)}` : '-',
+                    t.quantity.toFixed(2),
+                    money(t.pnl),
+                    `${t.pnl_pct.toFixed(2)}%`
+                ];
+                const row = body.insertRow();
+                cells.forEach((text, i) => {
+                    const cell = row.insertCell();
+                    cell.textContent = text;
+                    if (i >= 4) {
+                        cell.classList.add(t.pnl >= 0 ? 'positive' : 'negative');
+                    }
+                });
             }
         }
 

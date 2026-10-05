@@ -1,8 +1,13 @@
 """
-Initialize database and seed with strategies and risk configs
+Create the tables and seed strategies and risk profiles from config/*.json.
+This is the only place seed data comes from (SQLite locally, PostgreSQL in Docker).
 """
-from app.models.database import Base, engine, SessionLocal, Strategy, RiskConfig
 import json
+from pathlib import Path
+
+from app.models.database import Base, engine, SessionLocal, Strategy, RiskConfig
+
+CONFIG_DIR = Path(__file__).resolve().parent / 'config'
 
 def init_database():
     """Create all tables and seed initial data"""
@@ -13,14 +18,13 @@ def init_database():
     db = SessionLocal()
 
     try:
-        # Check if data already exists
-        if db.query(Strategy).count() > 0:
+        if db.query(Strategy).count() > 0 or db.query(RiskConfig).count() > 0:
             print("Database already contains data. Skipping seed.")
             return
 
         # Load strategies from config
         print("Loading strategies...")
-        with open('config/strategies.json', 'r') as f:
+        with open(CONFIG_DIR / 'strategies.json', 'r') as f:
             strategies_config = json.load(f)
 
         for key, config in strategies_config.items():
@@ -34,7 +38,7 @@ def init_database():
 
         # Load risk configs
         print("Loading risk configurations...")
-        with open('config/risk_configs.json', 'r') as f:
+        with open(CONFIG_DIR / 'risk_configs.json', 'r') as f:
             risk_configs = json.load(f)
 
         for key, config in risk_configs.items():

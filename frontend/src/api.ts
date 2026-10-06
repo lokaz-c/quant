@@ -16,6 +16,14 @@ export interface DataLabel {
   adjustment?: 'split' | 'raw' | null
 }
 
+/** This server's caps on one run (QUANT_MAX_SYMBOLS, QUANT_MAX_RANGE_DAYS, QUANT_BACKTEST_TIMEOUT_SECONDS) */
+export interface Limits {
+  max_symbols: number
+  // calendar days from start_date to end_date, both included
+  max_range_days: number
+  timeout_seconds: number
+}
+
 export interface DataInfo extends DataLabel {
   symbols: string[]
   start_date: string
@@ -24,6 +32,7 @@ export interface DataInfo extends DataLabel {
   bars: number | null
   available_sources: DataSource[]
   default_source: DataSource
+  limits: Limits
 }
 
 export interface ParameterLimit {
@@ -165,19 +174,28 @@ export class ApiError extends Error {
   }
 }
 
+/** The message to show for an error response: RFC 9457 `detail`, or the older `error` field */
+function errorMessage(response: Response, body: unknown): string {
+  if (response.status === 429) {
+    const wait = Number(response.headers.get('Retry-After'))
+    return `Too many requests from this address. Try again in ${Number.isFinite(wait) && wait > 0 ? wait : 60} s.`
+  }
+  if (body && typeof body === 'object') {
+    for (const field of ['detail', 'error'] as const) {
+      const value = (body as Record<string, unknown>)[field]
+      if (typeof value === 'string' && value) return value
+    }
+  }
+  return `${response.status} ${response.statusText}`
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   const body: unknown = await response.json().catch(() => null)
-  if (!response.ok) {
-    const message =
-      body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
-        ? body.error
-        : `${response.status} ${response.statusText}`
-    throw new ApiError(message, response.status)
-  }
+  if (!response.ok) throw new ApiError(errorMessage(response, body), response.status)
   return body as T
 }
 

@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { dataInfo, riskProfiles, strategies } from '../test/fixtures'
-import { RunForm } from './RunForm'
+import { periodDays, RunForm, validate } from './RunForm'
 
 function renderForm() {
   const onSubmit = vi.fn()
@@ -62,6 +62,34 @@ describe('RunForm', () => {
     expect(alert).toHaveTextContent('fast_period must be a whole number')
     expect(alert).toHaveTextContent('Pick at least one symbol')
     expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it("keeps a run within the server's caps on symbols and period", async () => {
+    const onSubmit = vi.fn()
+    const capped = { ...dataInfo, limits: { max_symbols: 3, max_range_days: 365, timeout_seconds: 60 } }
+    render(<RunForm data={capped} strategies={strategies} riskProfiles={riskProfiles} running={false} onSubmit={onSubmit} />)
+    const user = userEvent.setup()
+    // more symbols than the cap: no "All" button
+    expect(screen.queryByRole('button', { name: 'All' })).toBeNull()
+    expect(screen.getByText(/5 of 6, at most 3/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Run backtest' }))
+    expect(screen.getByRole('alert')).toHaveTextContent("Pick at most 3 symbols (this server's limit per run)")
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('counts the period in calendar days, both ends included', () => {
+    expect(periodDays('2023-01-01', '2023-12-31')).toBe(365)
+    expect(periodDays('2020-01-01', '2024-12-31')).toBe(1827)
+    expect(periodDays('2023-03-11', '2023-03-13')).toBe(3)
+    const request = {
+      strategy_name: 'x', risk_config_name: 'y', start_date: '2020-01-01', end_date: '2024-12-31',
+      initial_capital: 1, symbols: ['AAPL'], compare_to_baseline: false,
+    }
+    const limits = { max_symbols: 10, max_range_days: 1826, timeout_seconds: 60 }
+    expect(validate(request, {}, undefined, limits)).toEqual([
+      'The period is 1,827 days; this server allows at most 1,826 per run',
+    ])
+    expect(validate(request, {}, undefined, { ...limits, max_range_days: 1827 })).toEqual([])
   })
 
   it('turns the baseline off when the profile already has no risk layer', async () => {

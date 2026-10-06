@@ -44,6 +44,7 @@ export const dataInfo: DataInfo = {
   bars: 1305,
   available_sources: ['synthetic'],
   default_source: 'synthetic',
+  limits: { max_symbols: 10, max_range_days: 1827, timeout_seconds: 90 },
 }
 
 export const marketDataInfo: DataInfo = {
@@ -54,6 +55,7 @@ export const marketDataInfo: DataInfo = {
   bars: null,
   available_sources: ['synthetic', 'market-data'],
   default_source: 'market-data',
+  limits: { max_symbols: 10, max_range_days: 1827, timeout_seconds: 90 },
 }
 
 export const strategies: Strategy[] = [

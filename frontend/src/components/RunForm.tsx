@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import type { DataInfo, RiskProfile, RunRequest, Strategy } from '../api'
+import type { DataInfo, Limits, RiskProfile, RunRequest, Strategy } from '../api'
 import { formatFraction } from '../format'
 
 // Same setup as `make results` (docs/results.md), over one year
@@ -21,6 +21,7 @@ export function validate(
   request: Omit<RunRequest, 'parameters'>,
   parameters: Record<string, string>,
   strategy: Strategy | undefined,
+  limits?: Limits,
 ): string[] {
   const problems: string[] = []
   for (const [name, limit] of Object.entries(strategy?.parameter_limits ?? {})) {
@@ -31,8 +32,15 @@ export function validate(
     else if (value < limit.min || value > limit.max) problems.push(`${name} must be between ${limit.min} and ${limit.max}`)
   }
   if (request.symbols.length === 0) problems.push('Pick at least one symbol')
+  else if (limits && request.symbols.length > limits.max_symbols)
+    problems.push(`Pick at most ${limits.max_symbols} symbols (this server's limit per run)`)
   if (!request.start_date || !request.end_date) problems.push('Pick a start and an end date')
   else if (request.start_date > request.end_date) problems.push('The start date is after the end date')
+  else if (limits && periodDays(request.start_date, request.end_date) > limits.max_range_days)
+    problems.push(
+      `The period is ${periodDays(request.start_date, request.end_date).toLocaleString('en-US')} days; ` +
+        `this server allows at most ${limits.max_range_days.toLocaleString('en-US')} per run`,
+    )
   if (!(request.initial_capital > 0)) problems.push('Initial capital must be above 0')
   return problems
 }
@@ -85,7 +93,7 @@ export function RunForm({ data, strategies, riskProfiles, running, onSubmit }: P
       compare_to_baseline: compare && Boolean(risk?.enabled),
       data_source: data.source,
     }
-    const found = validate(request, parameters, strategy)
+    const found = validate(request, parameters, strategy, data.limits)
     setProblems(found)
     if (found.length) return
     onSubmit({
@@ -137,7 +145,10 @@ export function RunForm({ data, strategies, riskProfiles, running, onSubmit }: P
 
       <fieldset>
         <legend className="label">
-          Symbols <span className="count">{symbols.length} of {data.symbols.length}</span>
+          Symbols{' '}
+          <span className="count">
+            {symbols.length} of {data.symbols.length}, at most {data.limits.max_symbols}
+          </span>
         </legend>
         <div className="chips" role="group" aria-label="Symbols">
           {data.symbols.map((symbol) => (
@@ -153,9 +164,11 @@ export function RunForm({ data, strategies, riskProfiles, running, onSubmit }: P
           ))}
         </div>
         <div className="chip-actions">
-          <button type="button" className="text-button" onClick={() => setSymbols(data.symbols)}>
-            All
-          </button>
+          {data.symbols.length <= data.limits.max_symbols && (
+            <button type="button" className="text-button" onClick={() => setSymbols(data.symbols)}>
+              All
+            </button>
+          )}
           <button type="button" className="text-button" onClick={() => setSymbols([])}>
             None
           </button>
@@ -200,7 +213,9 @@ export function RunForm({ data, strategies, riskProfiles, running, onSubmit }: P
         <p className="hint">
           {data.bars != null
             ? `Data covers ${data.start_date} to ${data.end_date} (${data.bars.toLocaleString('en-US')} business days).`
-            : `market-data has these symbols from ${data.start_date} to ${data.end_date}.`}
+            : `market-data has these symbols from ${data.start_date} to ${data.end_date}.`}{' '}
+          At most {data.limits.max_range_days.toLocaleString('en-US')} days per run; the server stops a run after{' '}
+          {data.limits.timeout_seconds} s.
         </p>
       </fieldset>
 
@@ -269,6 +284,11 @@ function sentenceCase(name: string): string {
 
 function asStrings(values: Record<string, number> | undefined): Record<string, string> {
   return Object.fromEntries(Object.entries(values ?? {}).map(([k, v]) => [k, String(v)]))
+}
+
+/** Calendar days from start to end, both included (as the server counts them) */
+export function periodDays(start: string, end: string): number {
+  return Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000) + 1
 }
 
 function clampDate(value: string, data: DataInfo): string {

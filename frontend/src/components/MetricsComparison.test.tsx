@@ -7,8 +7,8 @@ describe('MetricsComparison', () => {
   it('shows the baseline, the risk profile and the change side by side', () => {
     render(
       <MetricsComparison
-        run={{ label: 'Conservative', metrics: managedRun.metrics! }}
-        baseline={{ label: 'No Risk Management', metrics: baselineRun.metrics! }}
+        run={{ label: 'Conservative', metrics: managedRun.metrics!, undefinedMetrics: {} }}
+        baseline={{ label: 'No Risk Management', metrics: baselineRun.metrics!, undefinedMetrics: {} }}
       />,
     )
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
@@ -23,7 +23,33 @@ describe('MetricsComparison', () => {
   })
 
   it('shows one column without a baseline', () => {
-    render(<MetricsComparison run={{ label: 'Conservative', metrics: managedRun.metrics! }} baseline={null} />)
+    render(
+      <MetricsComparison run={{ label: 'Conservative', metrics: managedRun.metrics!, undefinedMetrics: {} }} baseline={null} />,
+    )
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Metric', 'Conservative'])
+    expect(screen.queryByText(/the metric is undefined/)).not.toBeInTheDocument()
+  })
+
+  it('shows an undefined metric as n/a with the reason, and no change against it', () => {
+    render(
+      <MetricsComparison
+        run={{
+          label: 'Conservative',
+          metrics: { ...managedRun.metrics!, sharpe_ratio: null, volatility: null },
+          undefinedMetrics: { sharpe_ratio: 'zero volatility', volatility: 'fewer than two daily returns' },
+        }}
+        baseline={{ label: 'No Risk Management', metrics: baselineRun.metrics!, undefinedMetrics: {} }}
+      />,
+    )
+    const sharpe = screen.getByRole('row', { name: /Sharpe ratio/ })
+    const cells = within(sharpe).getAllByRole('cell')
+    expect(cells.map((c) => c.textContent)).toEqual(['-0.20', 'n/a', 'n/a'])
+    expect(within(cells[1]!).getByTitle('Not available: zero volatility')).toBeInTheDocument()
+
+    const notes = screen.getAllByRole('listitem').map((li) => li.textContent)
+    expect(notes).toEqual([
+      'Volatility (annualised), Conservative: fewer than two daily returns',
+      'Sharpe ratio, Conservative: zero volatility',
+    ])
   })
 })

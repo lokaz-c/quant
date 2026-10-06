@@ -1,5 +1,6 @@
-import type { Metrics } from '../api'
+import type { Metrics, UndefinedMetrics } from '../api'
 import { formatMoney, formatNumber, formatPct, formatSigned } from '../format'
+import { NOT_AVAILABLE, NotAvailable, reasonFor } from './NotAvailable'
 
 interface Row {
   key: keyof Metrics
@@ -26,12 +27,31 @@ export const ROWS: Row[] = [
   },
 ]
 
+interface Column {
+  label: string
+  metrics: Metrics
+  // the reason for each null metric, from the API
+  undefinedMetrics: UndefinedMetrics | null
+}
+
 interface Props {
-  run: { label: string; metrics: Metrics }
-  baseline: { label: string; metrics: Metrics } | null
+  run: Column
+  baseline: Column | null
+}
+
+function Value({ row, column }: { row: Row; column: Column }) {
+  const value = column.metrics[row.key]
+  return value == null ? <NotAvailable reason={reasonFor(column.undefinedMetrics, row.key)} /> : <>{row.format(value)}</>
 }
 
 export function MetricsComparison({ run, baseline }: Props) {
+  // One line per undefined value on screen, so the reason can be read without hovering
+  const notes = ROWS.flatMap((row) =>
+    [baseline, run]
+      .filter((column): column is Column => column != null && column.metrics[row.key] == null)
+      .map((column) => `${row.label}, ${column.label}: ${reasonFor(column.undefinedMetrics, row.key)}`),
+  )
+
   return (
     <div className="table-wrap">
       <table className="metrics">
@@ -56,10 +76,18 @@ export function MetricsComparison({ run, baseline }: Props) {
                   {row.label}
                   {row.lowerIsBetter && <span className="muted block">lower is better</span>}
                 </th>
-                {baseline && <td className="num">{row.format(base as number)}</td>}
-                <td className="num strong">{row.format(value)}</td>
                 {baseline && (
-                  <td className="num">{(row.formatChange ?? formatSigned)(value - (base as number))}</td>
+                  <td className="num">
+                    <Value row={row} column={baseline} />
+                  </td>
+                )}
+                <td className="num strong">
+                  <Value row={row} column={run} />
+                </td>
+                {baseline && (
+                  <td className="num">
+                    {value == null || base == null ? NOT_AVAILABLE : (row.formatChange ?? formatSigned)(value - base)}
+                  </td>
                 )}
               </tr>
             )
@@ -70,6 +98,16 @@ export function MetricsComparison({ run, baseline }: Props) {
         <p className="hint">
           Change = {run.label} minus {baseline.label}, in percentage points for the percentages.
         </p>
+      )}
+      {notes.length > 0 && (
+        <div className="hint">
+          <p>n/a: the metric is undefined for that run.</p>
+          <ul className="notes">
+            {notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   )

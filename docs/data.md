@@ -8,6 +8,8 @@ make data        # python -m backtest_engine.data_loader  (seed 42)
 
 `tests/test_data_generation.py` regenerates it and compares it with the committed file byte for byte. The engine reads any CSV with the columns `timestamp, symbol, open, high, low, close, volume`. The sample adds a `regime` column.
 
+This file is the `synthetic` data source: the default when `MARKET_DATA_URL` is not set, and always the data behind `make results` and CI. Bars from the market-data service are the other source; see [market-data.md](market-data.md).
+
 ## Model
 
 1. **Regimes.** A discrete-time Markov chain picks one market-wide regime per day: `bull`, `bear` or `sideways`. The first day is drawn from the chain's stationary distribution unless `initial_distribution` is set. Every symbol shares the same regime path.

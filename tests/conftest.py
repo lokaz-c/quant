@@ -26,6 +26,14 @@ for _name in ('QUANT_DATA_SOURCE', 'MARKET_DATA_URL', 'MARKET_DATA_API_KEY', 'MA
               'MARKET_DATA_CACHE_DIR', 'MARKET_DATA_TIMEOUT', 'DATA_PATH'):
     os.environ.pop(_name, None)
 
+# The public-deploy settings (app/config.py) take their defaults, except that
+# rate limiting is off: the suite sends far more runs from one address than
+# the limit allows. tests/test_protection.py builds apps with it on.
+for _name in [n for n in os.environ if n.startswith('QUANT_') and n not in ('QUANT_TEST_POSTGRES_URL',
+                                                                           'QUANT_REQUIRE_POSTGRES')]:
+    os.environ.pop(_name, None)
+os.environ['QUANT_RATE_LIMITS'] = 'off'
+
 from tests.postgres import fresh_postgres_database  # noqa: E402
 
 

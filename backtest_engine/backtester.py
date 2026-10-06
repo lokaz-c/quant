@@ -2,6 +2,7 @@
 Main backtesting engine
 Orchestrates the entire backtesting process
 """
+import time
 import pandas as pd
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -10,6 +11,10 @@ from .portfolio import Portfolio
 from .strategy_base import StrategyBase
 from .risk import RiskManager, RiskConfig
 from .metrics import PerformanceMetrics
+
+
+class BacktestTimeout(RuntimeError):
+    """The run passed its deadline and was stopped between two bars"""
 
 
 class Backtester:
@@ -23,8 +28,15 @@ class Backtester:
         risk_config: Optional[RiskConfig] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        symbols: Optional[List[str]] = None
+        symbols: Optional[List[str]] = None,
+        deadline: Optional[float] = None
     ):
+        """
+        deadline: a time.monotonic() value. The loop checks it before each
+        bar and raises BacktestTimeout once it has passed. Python can't stop
+        a running thread from outside, so the check is cooperative; a bar
+        takes milliseconds, so the overshoot is small.
+        """
         self.strategy = strategy
         self.data_loader = data_loader
         self.initial_capital = initial_capital
@@ -32,6 +44,7 @@ class Backtester:
         self.start_date = start_date
         self.end_date = end_date
         self.symbols = symbols
+        self.deadline = deadline
 
         self.portfolio = None
         self.risk_manager = None
@@ -67,6 +80,8 @@ class Backtester:
 
         bar_count = 0
         for timestamp, bar_data in grouped:
+            if self.deadline is not None and time.monotonic() > self.deadline:
+                raise BacktestTimeout(f'stopped after {bar_count} of {grouped.ngroups} bars')
             bar_count += 1
 
             # Update current prices

@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Tuple, Union
 from app.models.database import (
     get_db, utcnow, Strategy, RiskConfig, BacktestRun,
     BacktestMetrics, EquityCurve, Trade
@@ -69,6 +69,26 @@ class BacktestService:
         market_regime: Optional[str] = None
     ) -> Dict:
         """Run a backtest and store results"""
+        response, _ = self.run_backtest_with_results(
+            strategy_name, risk_config_name, start_date, end_date, initial_capital,
+            symbols, market_regime)
+        return response
+
+    def run_backtest_with_results(
+        self,
+        strategy_name: str,
+        risk_config_name: str,
+        start_date: str,
+        end_date: str,
+        initial_capital: float,
+        symbols: Optional[List[str]] = None,
+        market_regime: Optional[str] = None
+    ) -> Tuple[Dict, Dict]:
+        """
+        run_backtest(), plus the engine's in-memory results: the float64
+        equity curve before it is stored as NUMERIC, and every trade. The SQL
+        cross-check compares against these.
+        """
 
         with get_db() as db:
             # Get strategy from database
@@ -189,7 +209,7 @@ class BacktestService:
                 'metrics': results['metrics'],
                 'summary': results['final_portfolio'],
                 'data': DATA_SOURCE
-            }
+            }, results
 
         except Exception as e:
             # Update status to failed

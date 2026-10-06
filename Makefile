@@ -13,7 +13,7 @@ PG_START = docker run -d --rm --name $(PG_TEST_CONTAINER) -e POSTGRES_USER=quant
 	until docker exec $(PG_TEST_CONTAINER) pg_isready -h 127.0.0.1 -U quant -q; do sleep 1; done
 PG_STOP = docker stop $(PG_TEST_CONTAINER) >/dev/null
 
-.PHONY: help run run-market-data down logs install install-live dev frontend frontend-dev test-frontend migrate test test-pg sql-check data results results-real bench clean db-shell
+.PHONY: help run run-market-data down logs install install-live dev frontend frontend-dev test-frontend migrate test test-pg sql-check data results results-real bench deploy-check clean db-shell
 
 help:
 	@echo "make run           Start PostgreSQL + the app in Docker (http://localhost:8000)"
@@ -34,6 +34,7 @@ help:
 	@echo "make results       Run the benchmark backtests and write docs/results.md (synthetic data)"
 	@echo "make results-real  The same benchmark on market-data bars -> docs/results-real.md (MARKET_DATA_URL)"
 	@echo "make bench         Time backtests and write docs/benchmark.md"
+	@echo "make deploy-check  Run the Docker image at Render free-tier size (0.1 CPU, 512 MB) and time a run"
 	@echo "make db-shell      psql into the Docker database"
 	@echo "make clean         Remove caches and the local SQLite database"
 
@@ -103,6 +104,10 @@ results-real:
 
 bench:
 	$(PYTHON) -m scripts.bench
+
+# The image as Render's free instance would run it; see README "Deploying"
+deploy-check:
+	./scripts/deploy_check.sh
 
 db-shell:
 	docker compose exec db psql -U quant_user -d quant_db

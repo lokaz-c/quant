@@ -10,26 +10,22 @@ RUN npm run build
 FROM python:3.11-slim
 
 WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first for better caching
+# Every pinned package ships a manylinux wheel, so no compiler or client
+# libraries are needed (psycopg2-binary bundles libpq)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
 # Copy application code (.dockerignore keeps node_modules, venvs and caches out)
 COPY . .
 COPY --from=frontend /frontend/dist ./frontend/dist
 
-# Create directories for data
-RUN mkdir -p /app/data
-
-# Expose Flask port
+# Port 5000 locally (docker compose); Render sets PORT
 EXPOSE 5000
 
-# Run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "300", "app.main:app"]
+# Bring the schema to the latest migration (alembic upgrade head) and seed an
+# empty database, then serve. gunicorn reads gunicorn.conf.py from /app.
+CMD ["sh", "-c", "python init_db.py && exec gunicorn app.main:app"]

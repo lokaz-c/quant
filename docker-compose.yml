@@ -26,6 +26,10 @@ services:
       QUANT_DATA_SOURCE: ${QUANT_DATA_SOURCE:-}
       MARKET_DATA_URL: ${MARKET_DATA_URL:-}
       MARKET_DATA_API_KEY: ${MARKET_DATA_API_KEY:-}
+      # Public-deploy settings (app/config.py); unset means the defaults
+      QUANT_CORS_ORIGINS: ${QUANT_CORS_ORIGINS:-}
+      QUANT_API_KEY_SHA256: ${QUANT_API_KEY_SHA256:-}
+      QUANT_RATE_LIMITS: ${QUANT_RATE_LIMITS:-}
     depends_on:
       db:
         condition: service_healthy
@@ -35,10 +39,14 @@ services:
         required: false
     volumes:
       - ./data:/app/data
-    # init_db.py runs `alembic upgrade head` and seeds, once, before the workers start
-    command: >
-      sh -c "python init_db.py &&
-             gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 300 app.main:app"
+    # The image's command, as on Render: init_db.py (alembic upgrade head, then
+    # seed an empty database), then gunicorn with gunicorn.conf.py
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
 
   # Optional market-data stack for local end-to-end runs: `make run-market-data`.
   # Built from a checkout of lokaz-c/market-data next to this one (MARKET_DATA_DIR,

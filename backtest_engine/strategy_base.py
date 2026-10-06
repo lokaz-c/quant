@@ -21,7 +21,7 @@ class StrategyBase(ABC):
         Generate trading signals based on current market data and portfolio state
 
         Args:
-            data: DataFrame with current and historical market data
+            data: OHLCV bars for every symbol, up to and including the current bar
             portfolio: Current portfolio state
 
         Returns:

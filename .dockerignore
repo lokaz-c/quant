@@ -11,3 +11,4 @@ htmlcov
 *.db
 frontend/node_modules
 frontend/dist
+data/cache

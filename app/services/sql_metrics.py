@@ -69,7 +69,9 @@ def _float(value) -> Optional[float]:
 
 
 def _naive_utc(timestamps) -> pd.DatetimeIndex:
-    return pd.DatetimeIndex(timestamps).tz_convert('UTC').tz_localize(None)
+    index = pd.DatetimeIndex(timestamps)
+    # An empty result (a curve shorter than the rolling window) has no time zone
+    return index.tz_convert('UTC').tz_localize(None) if index.tz is not None else index
 
 
 def sql_run_metrics(connection, run_id: int) -> Dict[str, Optional[float]]:
@@ -110,7 +112,9 @@ def _differences(py: PerformanceMetrics, connection, run_id: int) -> Dict[str, f
     """Largest absolute differences between `py` and the SQL for the run.
     Raises AssertionError if Sharpe is undefined in different places."""
     sql = sql_run_metrics(connection, run_id)
-    py_sharpe = py.sharpe_ratio() if py.volatility() > 0 else None  # Python's 0.0 = undefined
+    py_volatility, py_sharpe = py.volatility(), py.sharpe_ratio()  # None where undefined, like NULL
+    if (py_volatility is None) != (sql['volatility'] is None):
+        raise AssertionError('volatility is undefined on one side only')
     if (py_sharpe is None) != (sql['sharpe_ratio'] is None):
         raise AssertionError('full-period Sharpe is undefined on one side only')
 
@@ -129,7 +133,7 @@ def _differences(py: PerformanceMetrics, connection, run_id: int) -> Dict[str, f
     return {
         'max_drawdown': abs(py.max_drawdown() - sql['max_drawdown']),
         'drawdown_curve': float((py_drawdowns - sql_drawdown_curve(connection, run_id)).abs().max()),
-        'volatility': abs(py.volatility() - sql['volatility']),
+        'volatility': 0.0 if py_volatility is None else abs(py_volatility - sql['volatility']),
         'sharpe_ratio': 0.0 if py_sharpe is None else abs(py_sharpe - sql['sharpe_ratio']),
         'rolling_sharpe': float(rolling_abs.max()) if len(rolling_abs) else 0.0,
         'rolling_sharpe_rel': float(rolling_rel.max()) if len(rolling_rel) else 0.0,

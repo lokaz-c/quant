@@ -15,8 +15,9 @@
 --   * drawdown is measured from the running peak of the stored curve,
 --     starting at its first point (= initial capital: the first bar's fills
 --     happen at that bar's close, so they don't change equity).
--- One difference: where volatility is zero, Sharpe is undefined. The SQL
--- returns NULL there, while PerformanceMetrics.sharpe_ratio() returns 0.0.
+--   * where Sharpe or volatility is undefined (zero volatility, or fewer
+--     than two returns) the SQL returns NULL and PerformanceMetrics returns
+--     None, which the API sends as null.
 --
 -- Bind parameters: :run_id, :trading_days, :risk_free_rate, :window.
 -- The app binds them through SQLAlchemy (app/services/sql_metrics.py). In

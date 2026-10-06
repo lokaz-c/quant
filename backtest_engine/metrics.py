@@ -1,7 +1,14 @@
 """
 Performance metrics calculator
 Computes various trading performance metrics
+
+A metric whose formula has no value for a run (a division by zero, or a mean
+or standard deviation over too few values) is None, never a stand-in number
+such as 0.0 or infinity, and `PerformanceMetrics.undefined` says why. The API
+returns None as JSON null, with the reason in `undefined_metrics`
+(docs/api.md#undefined-metrics).
 """
+import math
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Mapping, Optional, Sequence
@@ -13,6 +20,15 @@ from datetime import datetime
 TRADING_DAYS_PER_YEAR = 252
 RISK_FREE_RATE = 0.02
 ROLLING_SHARPE_WINDOW = 63  # trading days, about one quarter
+
+# Why a metric is undefined (None). These strings are part of the API.
+FEWER_THAN_TWO_RETURNS = 'fewer than two daily returns'
+ZERO_VOLATILITY = 'zero volatility'
+ZERO_LENGTH_PERIOD = 'the run starts and ends on the same day'
+NO_CLOSED_TRADES = 'no closed trades'
+NO_WINNING_TRADES = 'no winning trades'
+NO_LOSING_TRADES = 'no losing trades'
+NOT_FINITE = 'the result is not a finite number'
 
 
 class PerformanceMetrics:
@@ -35,9 +51,22 @@ class PerformanceMetrics:
         if 'pnl' in self.trades_df:
             self.trades_df['pnl'] = self.trades_df['pnl'].astype(float)
 
+        # metric name -> why it is None; filled in as the metrics are computed
+        self.undefined: Dict[str, str] = {}
+
+    def _undefined(self, metric: str, reason: str) -> None:
+        self.undefined[metric] = reason
+        return None
+
     def calculate_all(self) -> Dict:
-        """Calculate all performance metrics"""
-        return {
+        """
+        Calculate all performance metrics. Undefined ones are None, with the
+        reason in self.undefined. Any other non-finite result (e.g. a CAGR
+        that overflows over a very short run) is also None, so nothing
+        returned here is NaN or infinite.
+        """
+        self.undefined = {}
+        metrics = {
             'total_return': self.total_return(),
             'cagr': self.cagr(),
             'max_drawdown': self.max_drawdown(),
@@ -52,6 +81,15 @@ class PerformanceMetrics:
             'max_consecutive_wins': self.max_consecutive_wins(),
             'max_consecutive_losses': self.max_consecutive_losses()
         }
+        for name, value in metrics.items():
+            if isinstance(value, float) and not math.isfinite(value):
+                metrics[name] = self._undefined(name, NOT_FINITE)
+        return metrics
+
+    def _daily_returns(self) -> pd.Series:
+        if len(self.equity_df) < 2:
+            return pd.Series(dtype=float)
+        return self.equity_df['equity'].pct_change().dropna()
 
     def total_return(self) -> float:
         """Total return percentage"""
@@ -61,17 +99,19 @@ class PerformanceMetrics:
         final = self.equity_df['equity'].iloc[-1]
         return ((final - self.initial_capital) / self.initial_capital) * 100
 
-    def cagr(self) -> float:
-        """Compound Annual Growth Rate"""
-        if len(self.equity_df) < 2 or self.initial_capital == 0:
+    def cagr(self) -> Optional[float]:
+        """Compound Annual Growth Rate; None for a run that covers no time"""
+        if self.initial_capital == 0:
             return 0.0
+        if len(self.equity_df) < 2:
+            return self._undefined('cagr', ZERO_LENGTH_PERIOD)
 
         start_date = self.equity_df['timestamp'].iloc[0]
         end_date = self.equity_df['timestamp'].iloc[-1]
         years = (end_date - start_date).days / 365.25
 
         if years == 0:
-            return 0.0
+            return self._undefined('cagr', ZERO_LENGTH_PERIOD)
 
         final = self.equity_df['equity'].iloc[-1]
         cagr = (((final / self.initial_capital) ** (1 / years)) - 1) * 100
@@ -91,16 +131,15 @@ class PerformanceMetrics:
 
         return float(self.drawdown_series().max())
 
-    def volatility(self) -> float:
-        """Annualized volatility"""
-        if len(self.equity_df) < 2:
-            return 0.0
+    def volatility(self) -> Optional[float]:
+        """
+        Annualized volatility; None with fewer than two daily returns (the
+        sample standard deviation needs two)
+        """
+        returns = self._daily_returns()
 
-        # Calculate daily returns
-        returns = self.equity_df['equity'].pct_change().dropna()
-
-        if len(returns) == 0:
-            return 0.0
+        if len(returns) < 2:
+            return self._undefined('volatility', FEWER_THAN_TWO_RETURNS)
 
         # Annualize (assuming 252 trading days)
         daily_vol = returns.std()
@@ -108,23 +147,23 @@ class PerformanceMetrics:
 
         return float(annual_vol * 100)
 
-    def sharpe_ratio(self, risk_free_rate: float = RISK_FREE_RATE) -> float:
-        """Sharpe ratio (annualized)"""
-        if len(self.equity_df) < 2:
-            return 0.0
+    def sharpe_ratio(self, risk_free_rate: float = RISK_FREE_RATE) -> Optional[float]:
+        """
+        Sharpe ratio (annualized). None with fewer than two daily returns or
+        zero volatility, where it is undefined; sql/metrics.sql returns NULL
+        in the same cases.
+        """
+        returns = self._daily_returns()
 
-        # Calculate daily returns
-        returns = self.equity_df['equity'].pct_change().dropna()
-
-        if len(returns) == 0:
-            return 0.0
+        if len(returns) < 2:
+            return self._undefined('sharpe_ratio', FEWER_THAN_TWO_RETURNS)
 
         # Annualize
         annual_return = returns.mean() * TRADING_DAYS_PER_YEAR
         annual_vol = returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
 
         if annual_vol == 0:
-            return 0.0
+            return self._undefined('sharpe_ratio', ZERO_VOLATILITY)
 
         sharpe = (annual_return - risk_free_rate) / annual_vol
 
@@ -137,7 +176,8 @@ class PerformanceMetrics:
         timestamp of the window's last return. Same conventions as
         sharpe_ratio(). The first equity point has no return, so the first
         value is at point `window` (0-based). Windows with zero volatility,
-        where Sharpe is undefined, are NaN (sharpe_ratio() reports 0.0 there).
+        where Sharpe is undefined, are NaN (where sharpe_ratio() gives None).
+        This series is internal (the SQL cross-check); no API returns it.
         """
         if len(self.equity_df) < 2:
             return pd.Series(dtype=float)
@@ -148,42 +188,44 @@ class PerformanceMetrics:
         sharpe = (mean * TRADING_DAYS_PER_YEAR - risk_free_rate) / (std * np.sqrt(TRADING_DAYS_PER_YEAR))
         return sharpe.where(std > 0).iloc[window - 1:]
 
-    def win_rate(self) -> float:
-        """Percentage of winning trades"""
+    def _closed_trades(self) -> pd.DataFrame:
         if len(self.trades_df) == 0:
-            return 0.0
+            return self.trades_df
+        return self.trades_df[self.trades_df['status'] == 'closed']
 
-        closed_trades = self.trades_df[self.trades_df['status'] == 'closed']
+    def win_rate(self) -> Optional[float]:
+        """Percentage of winning trades; None with no closed trades"""
+        closed_trades = self._closed_trades()
 
         if len(closed_trades) == 0:
-            return 0.0
+            return self._undefined('win_rate', NO_CLOSED_TRADES)
 
         wins = len(closed_trades[closed_trades['pnl'] > 0])
         return (wins / len(closed_trades)) * 100
 
-    def avg_win(self) -> float:
-        """Average winning trade P&L"""
-        if len(self.trades_df) == 0:
-            return 0.0
+    def avg_win(self) -> Optional[float]:
+        """Average winning trade P&L; None without a winning trade"""
+        closed_trades = self._closed_trades()
+        if len(closed_trades) == 0:
+            return self._undefined('avg_win', NO_CLOSED_TRADES)
 
-        closed_trades = self.trades_df[self.trades_df['status'] == 'closed']
         winning_trades = closed_trades[closed_trades['pnl'] > 0]
 
         if len(winning_trades) == 0:
-            return 0.0
+            return self._undefined('avg_win', NO_WINNING_TRADES)
 
         return float(winning_trades['pnl'].mean())
 
-    def avg_loss(self) -> float:
-        """Average losing trade P&L (negative value)"""
-        if len(self.trades_df) == 0:
-            return 0.0
+    def avg_loss(self) -> Optional[float]:
+        """Average losing trade P&L (negative value); None without a losing trade"""
+        closed_trades = self._closed_trades()
+        if len(closed_trades) == 0:
+            return self._undefined('avg_loss', NO_CLOSED_TRADES)
 
-        closed_trades = self.trades_df[self.trades_df['status'] == 'closed']
         losing_trades = closed_trades[closed_trades['pnl'] < 0]
 
         if len(losing_trades) == 0:
-            return 0.0
+            return self._undefined('avg_loss', NO_LOSING_TRADES)
 
         return float(losing_trades['pnl'].mean())
 
@@ -201,21 +243,21 @@ class PerformanceMetrics:
 
         return float(self.equity_df['equity'].iloc[-1])
 
-    def profit_factor(self) -> float:
-        """Ratio of gross profits to gross losses"""
-        if len(self.trades_df) == 0:
-            return 0.0
-
-        closed_trades = self.trades_df[self.trades_df['status'] == 'closed']
+    def profit_factor(self) -> Optional[float]:
+        """
+        Gross profit / gross loss. None with no closed trades or no losing
+        trade: the ratio would be infinite (or 0/0), which JSON can't carry.
+        """
+        closed_trades = self._closed_trades()
 
         if len(closed_trades) == 0:
-            return 0.0
+            return self._undefined('profit_factor', NO_CLOSED_TRADES)
 
         gross_profit = closed_trades[closed_trades['pnl'] > 0]['pnl'].sum()
         gross_loss = abs(closed_trades[closed_trades['pnl'] < 0]['pnl'].sum())
 
         if gross_loss == 0:
-            return float('inf') if gross_profit > 0 else 0.0
+            return self._undefined('profit_factor', NO_LOSING_TRADES)
 
         return float(gross_profit / gross_loss)
 
@@ -315,7 +357,9 @@ def returns_by_regime(
 
     Returns:
         {regime: {'days', 'compounded_return_pct', 'annualized_mean_return_pct',
-                  'annualized_volatility_pct'}}
+                  'annualized_volatility_pct', 'undefined_metrics'}}
+        Volatility is None for a regime with a single day (the sample
+        standard deviation needs two returns); 'undefined_metrics' then says so.
     """
     if len(equity_curve) < 2:
         return {}
@@ -333,11 +377,13 @@ def returns_by_regime(
         returns = df.loc[df['regime'] == name, 'daily_return']
         if returns.empty:
             continue
-        volatility = returns.std(ddof=1) * np.sqrt(trading_days_per_year) if len(returns) > 1 else 0.0
+        defined = len(returns) > 1
+        volatility = returns.std(ddof=1) * np.sqrt(trading_days_per_year) * 100 if defined else None
         result[name] = {
             'days': int(len(returns)),
             'compounded_return_pct': float(((1 + returns).prod() - 1) * 100),
             'annualized_mean_return_pct': float(returns.mean() * trading_days_per_year * 100),
-            'annualized_volatility_pct': float(volatility * 100),
+            'annualized_volatility_pct': None if volatility is None else float(volatility),
+            'undefined_metrics': {} if defined else {'annualized_volatility_pct': FEWER_THAN_TWO_RETURNS},
         }
     return result

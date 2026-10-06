@@ -118,12 +118,25 @@ def run_benchmarks(config: BenchmarkConfig, bars: Optional[LoadedBars] = None) -
     return runs
 
 
-def _pct(value: float) -> str:
-    return f'{value:.2f}%'
+# An undefined metric (None; e.g. Sharpe with zero volatility, win rate with
+# no trades) prints as n/a. The benchmark runs have none.
+NOT_AVAILABLE = 'n/a'
 
 
-def _signed_pct(value: float) -> str:
-    return f'{value:+.2f}'
+def _pct(value: Optional[float]) -> str:
+    return NOT_AVAILABLE if value is None else f'{value:.2f}%'
+
+
+def _signed_pct(value: Optional[float]) -> str:
+    return NOT_AVAILABLE if value is None else f'{value:+.2f}'
+
+
+def _ratio(value: Optional[float], sign: str = '') -> str:
+    return NOT_AVAILABLE if value is None else f'{value:{sign}.2f}'
+
+
+def _diff(a: Optional[float], b: Optional[float]) -> Optional[float]:
+    return None if a is None or b is None else a - b
 
 
 def _fmt_opt(value: Optional[float]) -> str:
@@ -173,7 +186,7 @@ def _results_lines(config: BenchmarkConfig, runs: List[Run], profiles: List[Risk
         m = r.metrics
         lines.append(
             f'| {r.strategy} | {r.risk_profile} | {_pct(m["total_return"])} | {_pct(m["cagr"])} | '
-            f'{_pct(m["max_drawdown"])} | {_pct(m["volatility"])} | {m["sharpe_ratio"]:.2f} | '
+            f'{_pct(m["max_drawdown"])} | {_pct(m["volatility"])} | {_ratio(m["sharpe_ratio"])} | '
             f'{m["num_trades"]} | {_pct(m["win_rate"])} |'
         )
 
@@ -200,9 +213,9 @@ def _results_lines(config: BenchmarkConfig, runs: List[Run], profiles: List[Risk
                 if m is None:
                     continue
                 lines.append(
-                    f'| {strategy} | {name} | {_signed_pct(m["total_return"] - base["total_return"])} | '
-                    f'{_signed_pct(m["max_drawdown"] - base["max_drawdown"])} | '
-                    f'{m["sharpe_ratio"] - base["sharpe_ratio"]:+.2f} |'
+                    f'| {strategy} | {name} | {_signed_pct(_diff(m["total_return"], base["total_return"]))} | '
+                    f'{_signed_pct(_diff(m["max_drawdown"], base["max_drawdown"]))} | '
+                    f'{_ratio(_diff(m["sharpe_ratio"], base["sharpe_ratio"]), "+")} |'
                 )
     return lines
 

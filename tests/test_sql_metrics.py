@@ -139,9 +139,9 @@ def test_known_answers(pg_engine):
 
 
 @pytest.mark.postgres
-def test_flat_curve_sharpe_is_null_in_sql_and_zero_in_python(pg_engine):
-    # The one convention that differs: with zero volatility Sharpe is
-    # undefined. SQL says NULL; PerformanceMetrics.sharpe_ratio() says 0.0.
+def test_flat_curve_sharpe_is_undefined_in_sql_and_python(pg_engine):
+    # With zero volatility Sharpe is undefined: NULL in SQL, None in Python
+    # (and null in the API)
     run_id = insert_curve(pg_engine, [100_000] * (ROLLING_SHARPE_WINDOW + 5))
     with pg_engine.connect() as conn:
         sql = sql_run_metrics(conn, run_id)
@@ -153,5 +153,24 @@ def test_flat_curve_sharpe_is_null_in_sql_and_zero_in_python(pg_engine):
     curve = [{'timestamp': datetime(2023, 1, 2) + timedelta(days=i), 'equity': 100_000}
              for i in range(ROLLING_SHARPE_WINDOW + 5)]
     py = PerformanceMetrics(curve, [], 100_000)
-    assert py.sharpe_ratio() == 0.0
+    assert py.sharpe_ratio() is None
     assert py.rolling_sharpe().isna().all()
+
+
+@pytest.mark.postgres
+def test_one_return_leaves_volatility_and_sharpe_undefined_on_both_sides(pg_engine):
+    # Two points give one daily return; the sample standard deviation needs
+    # two. STDDEV_SAMP is NULL, and Python gives None, where it used to give NaN
+    run_id = insert_curve(pg_engine, [100_000, 101_000])
+    with pg_engine.connect() as conn:
+        sql = sql_run_metrics(conn, run_id)
+        comparison = compare_with_python(conn, run_id, stored_equity_curve(conn, run_id), 100_000)
+    assert sql['returns'] == 1
+    assert sql['volatility'] is None and sql['sharpe_ratio'] is None
+
+    py = PerformanceMetrics([{'timestamp': datetime(2023, 1, 2), 'equity': 100_000},
+                             {'timestamp': datetime(2023, 1, 3), 'equity': 101_000}], [], 100_000)
+    assert py.volatility() is None and py.sharpe_ratio() is None
+    assert py.undefined == {'volatility': 'fewer than two daily returns',
+                            'sharpe_ratio': 'fewer than two daily returns'}
+    assert comparison['formula']['volatility'] == 0.0 and comparison['formula']['sharpe_ratio'] == 0.0

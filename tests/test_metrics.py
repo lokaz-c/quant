@@ -1,6 +1,9 @@
 """
 Unit tests for performance metrics
 """
+import math
+
+import numpy as np
 import pytest
 from datetime import datetime, timedelta
 import pandas as pd
@@ -198,7 +201,8 @@ def test_rolling_sharpe_is_undefined_in_flat_windows():
     curve = [{'timestamp': d, 'equity': 100.0} for d in pd.bdate_range('2023-01-02', periods=6)]
     metrics = PerformanceMetrics(curve, [], 100.0)
     assert metrics.rolling_sharpe(window=3).isna().all()
-    assert metrics.sharpe_ratio() == 0.0  # the full-period method reports 0.0 instead
+    assert metrics.sharpe_ratio() is None  # undefined in full too
+    assert metrics.undefined['sharpe_ratio'] == 'zero volatility'
 
 
 def test_drawdown_series_is_measured_from_the_running_peak():
@@ -207,3 +211,85 @@ def test_drawdown_series_is_measured_from_the_running_peak():
     metrics = PerformanceMetrics(curve, [], 100)
     assert metrics.drawdown_series().round(9).tolist() == [0.0, 0.0, 20.0, 0.0, 5.0]
     assert metrics.max_drawdown() == pytest.approx(20.0)
+
+
+def _trades(*pnls):
+    return [{'symbol': 'AAPL', 'pnl': pnl, 'status': 'closed'} for pnl in pnls]
+
+
+def _curve(*equities):
+    return [{'timestamp': d, 'equity': e}
+            for d, e in zip(pd.bdate_range('2023-01-02', periods=len(equities)), equities)]
+
+
+def _undefined_after_calculate_all(metrics):
+    values = metrics.calculate_all()
+    assert set(metrics.undefined) == {k for k, v in values.items() if v is None}
+    assert all(math.isfinite(v) for v in values.values() if isinstance(v, float))
+    return values, metrics.undefined
+
+
+def test_no_closed_trades_leaves_the_trade_ratios_undefined():
+    values, undefined = _undefined_after_calculate_all(
+        PerformanceMetrics(_curve(100.0, 101.0, 102.5), [], 100.0))
+    for key in ('win_rate', 'avg_win', 'avg_loss', 'profit_factor'):
+        assert values[key] is None and undefined[key] == 'no closed trades'
+    assert values['num_trades'] == 0 and values['max_consecutive_wins'] == 0
+
+
+def test_no_losing_trade_makes_profit_factor_undefined_not_infinite():
+    values, undefined = _undefined_after_calculate_all(
+        PerformanceMetrics(_curve(100.0, 101.0, 103.0), _trades(50.0, 25.0), 100.0))
+    assert values['profit_factor'] is None and undefined['profit_factor'] == 'no losing trades'
+    assert values['avg_loss'] is None and undefined['avg_loss'] == 'no losing trades'
+    assert values['avg_win'] == 37.5 and values['win_rate'] == 100.0
+
+
+def test_break_even_trades_only():
+    values, undefined = _undefined_after_calculate_all(
+        PerformanceMetrics(_curve(100.0, 100.0, 100.0), _trades(0.0, 0.0), 100.0))
+    assert values['win_rate'] == 0.0  # defined: 0 winners of 2
+    assert undefined == {'avg_win': 'no winning trades', 'avg_loss': 'no losing trades',
+                         'profit_factor': 'no losing trades', 'sharpe_ratio': 'zero volatility'}
+
+
+def test_losing_trades_only_give_a_zero_profit_factor():
+    values, undefined = _undefined_after_calculate_all(
+        PerformanceMetrics(_curve(100.0, 99.0, 97.0), _trades(-1.0, -2.0), 100.0))
+    assert values['profit_factor'] == 0.0
+    assert undefined['avg_win'] == 'no winning trades'
+
+
+def test_one_equity_point():
+    values, undefined = _undefined_after_calculate_all(PerformanceMetrics(_curve(100.0), [], 100.0))
+    assert values['total_return'] == 0.0 and values['max_drawdown'] == 0.0
+    assert undefined['cagr'] == 'the run starts and ends on the same day'
+    assert undefined['volatility'] == undefined['sharpe_ratio'] == 'fewer than two daily returns'
+
+
+def test_one_daily_return_used_to_give_nan():
+    values, undefined = _undefined_after_calculate_all(PerformanceMetrics(_curve(100.0, 101.0), [], 100.0))
+    assert values['volatility'] is None and values['sharpe_ratio'] is None
+    assert undefined['volatility'] == 'fewer than two daily returns'
+    assert values['cagr'] is not None
+
+
+def test_overflowing_cagr_is_undefined_not_infinite():
+    # x10,000 in one day: (1e4) ** 365.25 overflows a double
+    with np.errstate(over='ignore'):
+        values, undefined = _undefined_after_calculate_all(
+            PerformanceMetrics(_curve(100.0, 1_000_000.0), [], 100.0))
+    assert values['cagr'] is None and undefined['cagr'] == 'the result is not a finite number'
+    assert values['total_return'] == pytest.approx(999_900.0)
+
+
+def test_single_day_regime_has_undefined_volatility():
+    from backtest_engine.metrics import returns_by_regime
+    dates = pd.bdate_range('2023-01-02', periods=4)
+    curve = [{'timestamp': d, 'equity': e} for d, e in zip(dates, [100.0, 101.0, 102.0, 101.0])]
+    labels = {dates[1]: 'bull', dates[2]: 'bull', dates[3]: 'bear'}
+    result = returns_by_regime(curve, labels, ['bull', 'bear'])
+    assert result['bull']['undefined_metrics'] == {}
+    assert isinstance(result['bull']['annualized_volatility_pct'], float)
+    assert result['bear']['annualized_volatility_pct'] is None
+    assert result['bear']['undefined_metrics'] == {'annualized_volatility_pct': 'fewer than two daily returns'}

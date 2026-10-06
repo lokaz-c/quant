@@ -1,0 +1,1 @@
+{"title":"Too Many Requests","status":429,"detail":"Rate limit of 60 requests per minute exceeded. Retry in 1 s.","instance":"/v1/symbols"}

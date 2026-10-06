@@ -10,3 +10,6 @@ pytest==7.4.3
 pytest-cov==4.1.0
 gunicorn==21.2.0
 scipy==1.11.4
+# market-data client (data_sources/): per-phase timeouts, connection pooling, and
+# httpx.MockTransport for the tests. See docs/market-data.md for why not requests.
+httpx==0.28.1

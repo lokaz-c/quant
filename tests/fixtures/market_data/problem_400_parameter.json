@@ -1,0 +1,1 @@
+{"detail":"Invalid request parameters.","instance":"/v1/bars/S001","status":400,"title":"Bad Request","errors":[{"message":"must be less than or equal to 1000","parameter":"limit"}]}

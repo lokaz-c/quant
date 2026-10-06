@@ -1,4 +1,5 @@
 import type { RunSummary } from '../api'
+import { banner } from '../dataLabel'
 import { formatNumber, formatPct } from '../format'
 
 interface Props {
@@ -24,6 +25,7 @@ export function RunHistory({ runs, selectedId, onSelect }: Props) {
             <th scope="col">Risk profile</th>
             <th scope="col">Period</th>
             <th scope="col">Symbols</th>
+            <th scope="col">Data</th>
             <th scope="col" className="num">Return</th>
             <th scope="col" className="num">Max drawdown</th>
             <th scope="col" className="num">Sharpe</th>
@@ -45,6 +47,9 @@ export function RunHistory({ runs, selectedId, onSelect }: Props) {
                 {r.start_date} to {r.end_date}
               </td>
               <td title={r.symbols?.join(', ') ?? 'all'}>{r.symbols ? r.symbols.length : 'all'}</td>
+              <td title={`${r.data_source}, reported ${r.reported_source}`}>
+                {banner({ source: r.data_source, reported_source: r.reported_source, synthetic: r.synthetic, description: '' }).short}
+              </td>
               <td className="num">{formatPct(r.total_return)}</td>
               <td className="num">{formatPct(r.max_drawdown)}</td>
               <td className="num">{formatNumber(r.sharpe_ratio)}</td>

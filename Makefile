@@ -13,10 +13,11 @@ PG_START = docker run -d --rm --name $(PG_TEST_CONTAINER) -e POSTGRES_USER=quant
 	until docker exec $(PG_TEST_CONTAINER) pg_isready -h 127.0.0.1 -U quant -q; do sleep 1; done
 PG_STOP = docker stop $(PG_TEST_CONTAINER) >/dev/null
 
-.PHONY: help run down logs install install-live dev frontend frontend-dev test-frontend migrate test test-pg sql-check data results bench clean db-shell
+.PHONY: help run run-market-data down logs install install-live dev frontend frontend-dev test-frontend migrate test test-pg sql-check data results results-real bench clean db-shell
 
 help:
 	@echo "make run           Start PostgreSQL + the app in Docker (http://localhost:8000)"
+	@echo "make run-market-data  The same plus a local market-data service (synthetic data; needs ../market-data)"
 	@echo "make down          Stop the Docker stack and delete its database volume"
 	@echo "make logs          Follow the app container's logs"
 	@echo "make install       pip install -r requirements.txt"
@@ -30,7 +31,8 @@ help:
 	@echo "make test-pg       Run the test suite with a throwaway PostgreSQL 15 container"
 	@echo "make sql-check     Compare the SQL window-function metrics with Python on the benchmark runs"
 	@echo "make data          Regenerate data/sample_data.csv (synthetic, seed 42)"
-	@echo "make results       Run the benchmark backtests and write docs/results.md"
+	@echo "make results       Run the benchmark backtests and write docs/results.md (synthetic data)"
+	@echo "make results-real  The same benchmark on market-data bars -> docs/results-real.md (MARKET_DATA_URL)"
 	@echo "make bench         Time backtests and write docs/benchmark.md"
 	@echo "make db-shell      psql into the Docker database"
 	@echo "make clean         Remove caches and the local SQLite database"
@@ -38,8 +40,12 @@ help:
 run:
 	docker compose up --build
 
+# Synthetic data from the market-data service, end to end (docs/market-data.md)
+run-market-data:
+	MARKET_DATA_URL=http://market-data:8080 docker compose --profile market-data up --build
+
 down:
-	docker compose down -v
+	docker compose --profile market-data down -v
 
 logs:
 	docker compose logs -f web
@@ -87,6 +93,13 @@ data:
 
 results:
 	$(PYTHON) -m scripts.results
+
+# TODO(lorenzo): run once market-data has ingested Alpaca bars and you have its
+# API key (MARKET_DATA_URL=... MARKET_DATA_API_KEY=... make results-real), read
+# the numbers, then commit docs/results-real.md. Until then it refuses to write
+# anything but Alpaca data (see docs/market-data.md).
+results-real:
+	$(PYTHON) -m scripts.results --data-source market-data
 
 bench:
 	$(PYTHON) -m scripts.bench

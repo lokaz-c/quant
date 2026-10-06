@@ -1,14 +1,29 @@
 // Typed client for the Flask API (docs/api.md). Same origin in production;
 // proxied by Vite in development.
 
-export interface DataInfo {
+export type DataSource = 'synthetic' | 'market-data'
+// What the market-data service said the bars are; always 'synthetic' for the local file
+export type ReportedSource = 'synthetic' | 'alpaca' | 'mixed'
+
+/** Where bars came from: returned with every run and by GET /api/data */
+export interface DataLabel {
+  source: DataSource
+  reported_source: ReportedSource
   synthetic: boolean
-  file: string
   description: string
+  file?: string
+  symbol_sources?: Record<string, string> | null
+  adjustment?: 'split' | 'raw' | null
+}
+
+export interface DataInfo extends DataLabel {
   symbols: string[]
   start_date: string
   end_date: string
-  bars: number
+  // business days in the synthetic file; null for market-data
+  bars: number | null
+  available_sources: DataSource[]
+  default_source: DataSource
 }
 
 export interface ParameterLimit {
@@ -86,6 +101,7 @@ export interface Run {
   metrics: Metrics | null
   equity_curve: EquityPoint[]
   trades: Trade[]
+  data: DataLabel
 }
 
 export interface RunSummary {
@@ -102,6 +118,9 @@ export interface RunSummary {
   max_drawdown: number | null
   sharpe_ratio: number | null
   created_at: string
+  data_source: DataSource
+  reported_source: ReportedSource
+  synthetic: boolean
 }
 
 export interface RunRequest {
@@ -113,6 +132,8 @@ export interface RunRequest {
   symbols: string[]
   parameters: Record<string, number>
   compare_to_baseline: boolean
+  // the source the form's symbols and dates came from; the server default if omitted
+  data_source?: DataSource
 }
 
 export interface RunResponse {
@@ -120,6 +141,7 @@ export interface RunResponse {
   status: string
   metrics: Metrics
   baseline: { backtest_id: number; risk_config: string; metrics: Metrics } | null
+  data: DataLabel
 }
 
 export class ApiError extends Error {

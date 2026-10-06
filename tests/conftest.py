@@ -20,6 +20,12 @@ import pytest
 _db_dir = tempfile.mkdtemp(prefix='quant-tests-')
 os.environ['DATABASE_URL'] = 'sqlite:///' + os.path.join(_db_dir, 'test.db')
 
+# The suite runs on the synthetic data unless a test configures market-data
+# itself (against a fake server), whatever the developer's shell has set
+for _name in ('QUANT_DATA_SOURCE', 'MARKET_DATA_URL', 'MARKET_DATA_API_KEY', 'MARKET_DATA_ADJUSTMENT',
+              'MARKET_DATA_CACHE_DIR', 'MARKET_DATA_TIMEOUT', 'DATA_PATH'):
+    os.environ.pop(_name, None)
+
 from tests.postgres import fresh_postgres_database  # noqa: E402
 
 

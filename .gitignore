@@ -17,6 +17,8 @@ htmlcov/
 *.log
 data/*.csv
 !data/sample_data.csv
+# market-data bars cache (data_sources/cache.py)
+data/cache/
 .DS_Store
 postgres_data/
 *.db

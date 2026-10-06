@@ -83,6 +83,7 @@ export function RunForm({ data, strategies, riskProfiles, running, onSubmit }: P
       initial_capital: Number(capital),
       symbols,
       compare_to_baseline: compare && Boolean(risk?.enabled),
+      data_source: data.source,
     }
     const found = validate(request, parameters, strategy)
     setProblems(found)
@@ -197,7 +198,9 @@ export function RunForm({ data, strategies, riskProfiles, running, onSubmit }: P
           </label>
         </div>
         <p className="hint">
-          Data covers {data.start_date} to {data.end_date} ({data.bars.toLocaleString('en-US')} business days).
+          {data.bars != null
+            ? `Data covers ${data.start_date} to ${data.end_date} (${data.bars.toLocaleString('en-US')} business days).`
+            : `market-data has these symbols from ${data.start_date} to ${data.end_date}.`}
         </p>
       </fieldset>
 

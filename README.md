@@ -4,7 +4,12 @@
 
 A daily-bar backtesting engine with three strategies, a risk layer that can be switched on and off, a performance-metrics module, a Flask REST API with a React + TypeScript frontend, and a paper-trading adapter for Alpaca. I built it to answer one question: what does a simple risk layer (position caps, stop-losses, a drawdown halt) do to a strategy compared with running it unmanaged? I wanted the answer measured by code anyone can re-run.
 
-**The price data is synthetic.** It comes from a seeded generator: a Markov chain switches between bull, bear and sideways regimes, and each symbol follows a geometric Brownian motion with the current regime's drift and volatility. Ticker names are labels only. See [docs/data.md](docs/data.md). Any CSV with `timestamp, symbol, open, high, low, close, volume` columns can be used instead.
+**Data.** Backtests run on one of two sources, and every run records which one it used:
+
+- `synthetic` (the default, and what all published results use): a seeded generator in which a Markov chain switches between bull, bear and sideways regimes and each symbol follows a geometric Brownian motion with the current regime's drift and volatility. Ticker names are labels only. See [docs/data.md](docs/data.md).
+- `market-data`: daily bars from my [market-data](https://github.com/lokaz-c/market-data) service (Java, Spring Boot, PostgreSQL), read through a local cache. The service labels each symbol `alpaca` or `synthetic`, and a run is shown as real only when every symbol is Alpaca data. Alpaca's terms forbid public display without written consent, so the service's public endpoints serve synthetic data unless a key unlocks more. See [docs/market-data.md](docs/market-data.md).
+
+No results from real prices are published yet (TODO(lorenzo), see [Results](#results)).
 
 ![The app after one run: the Conservative risk profile against the unmanaged baseline](docs/screenshot.png)
 
@@ -18,19 +23,27 @@ flowchart LR
         cfg["config/data_generator.json<br/>regimes + transition matrix"] --> gen["generate_sample_data<br/>Markov regimes, GBM prices"]
         gen --> csv[("data/sample_data.csv")]
     end
-    csv --> loader["DataLoader"]
+    subgraph md["market-data service (separate repo)"]
+        mdapi["/v1/bars, /v1/symbols<br/>source: alpaca or synthetic"]
+    end
+    mdapi -- "HTTP: pages, retries,<br/>Retry-After, X-API-Key" --> client["MarketDataClient"]
+    client --> cache[("BarCache<br/>SQLite, data/cache/")]
+    csv --> switch{"data source<br/>QUANT_DATA_SOURCE"}
+    cache --> switch
+    switch -- "bars + provenance" --> loader["DataLoader"]
     loader --> engine["Backtester<br/>bar-by-bar loop"]
     strategies["Strategies<br/>MA crossover, RSI, breakout"] --> engine
     risk["RiskManager<br/>caps, stops, drawdown halt"] --> engine
     engine --> portfolio["Portfolio<br/>fills at the close"]
     engine --> metrics["PerformanceMetrics"]
     metrics --> service["BacktestService"]
+    switch -. "data_source, reported_source" .-> service
     service --> db[("PostgreSQL or SQLite")]
     migrations["Alembic migrations"] --> db
     db --> sqlcheck["sql/metrics.sql<br/>window functions"]
     sqlcheck -. "CI: must match" .-> metrics
     api["Flask REST API"] --> service
-    ui["React + TypeScript (Vite)<br/>built into frontend/dist, served by Flask"] --> api
+    ui["React + TypeScript (Vite)<br/>banner from each run's recorded source"] --> api
     strategies --> trader["LiveTrader"]
     risk --> trader
     trader --> broker["AlpacaBroker<br/>paper by default"]
@@ -44,7 +57,7 @@ On each bar the engine:
 4. passes them through the risk rules;
 5. fills them at that bar's close.
 
-Open positions are closed on the last bar. Each run is stored with its equity curve and trades.
+Open positions are closed on the last bar. Each run is stored with its equity curve, its trades and where its bars came from.
 
 ## Run it
 
@@ -68,7 +81,9 @@ make test-frontend  # TypeScript check and vitest
 
 For frontend work, run `make frontend-dev` next to `make dev`. It serves the app with hot reload on http://localhost:5173 and proxies `/api` to Flask.
 
-`make help` lists the other targets: `frontend`, `migrate`, `test-pg`, `sql-check`, `data`, `results`, `bench`, `down`, `db-shell`.
+To run on bars from the market-data service, set `MARKET_DATA_URL` (and `MARKET_DATA_API_KEY` for Alpaca symbols); the other settings are in `.env.example` and [docs/market-data.md](docs/market-data.md). `make run-market-data` starts quant next to a local market-data stack built from `../market-data`. That stack has no Alpaca keys, so it serves only synthetic symbols (S001-S050), and the app labels every run on it synthetic.
+
+`make help` lists the other targets: `frontend`, `migrate`, `test-pg`, `sql-check`, `data`, `results`, `results-real`, `bench`, `down`, `db-shell`.
 
 ## Results
 
@@ -84,6 +99,8 @@ For frontend work, run `make frontend-dev` next to `make dev`. It serves the app
 | Trend Following | Conservative | -1.87% | -0.38% | 13.26% | 3.41% | -0.68 | 87 | 37.93% |
 
 On this one simulated path, the Conservative profile gave a shallower max drawdown for all three strategies. The looser profiles did less: Aggressive never changed the Trend Following result, and it slightly deepened the RSI drawdown. These figures come from synthetic prices, so they describe the engine's behaviour, not any real-world edge. The full tables, including all profiles and returns split by regime, are in [docs/results.md](docs/results.md).
+
+`make results` ignores the market-data settings, so it stays on the synthetic file and stays reproducible. `make results-real` runs the same benchmark on market-data bars and writes `docs/results-real.md`. It refuses to write that file unless the service reports Alpaca data for every symbol, and it records each symbol's source and a hash of the bars. It has not been run against real data yet: TODO(lorenzo), once market-data has ingested Alpaca bars and has an API key for this app.
 
 ## Performance
 
@@ -109,18 +126,22 @@ The machine was busy with other work during this run; its load average is record
   - trades: win rate, average win and loss, profit factor, trade count, win and loss streaks
   - returns split by regime
 - **SQL cross-check** (`sql/metrics.sql`): max drawdown, volatility, Sharpe and a 63-day rolling Sharpe, recomputed in PostgreSQL from the stored equity curve with window functions (a running `MAX() OVER`, `LAG`, and `STDDEV_SAMP()` over a `ROWS BETWEEN 62 PRECEDING` frame). CI checks them against the Python metrics: within 1e-9 on the same stored values, and within 1e-5 against the engine's unrounded numbers. `make sql-check` runs the comparison on the 12 benchmark runs. Conventions and tolerances are in [docs/sql-metrics.md](docs/sql-metrics.md).
+- **Data sources** (`data_sources/`):
+  - `MarketDataClient`: httpx, keyset pagination, split-adjusted bars by default, an optional `X-API-Key`, 5 s connect and 30 s read timeouts, and retries on 429, 5xx and timeouts with full-jitter backoff that waits out the service's `Retry-After`. A response that breaks the API contract (an unknown `source`, bars out of order, a cursor that doesn't advance) is an error.
+  - `BarCache`: SQLite under `data/cache/`, keyed by service, ticker and adjustment, fetching only the date ranges it lacks. Bars from the last 7 days are fetched again until they settle, and each fetch re-reads one cached bar so a split that re-bases adjusted prices drops the series.
+  - the switch: `QUANT_DATA_SOURCE` (`market-data` when `MARKET_DATA_URL` is set, else `synthetic`), or `data_source` per request.
 - **Frontend** (`frontend/`): React 19 and TypeScript, built by Vite and served by Flask from `frontend/dist`.
   - a run form: strategy, parameters (checked against each strategy's limits), symbols, dates, capital and risk profile;
   - the chosen profile against the same run with the risk layer off: metrics side by side, and equity and drawdown curves on shared axes;
-  - the closed trades of both runs, and the run history.
-  Charts use Recharts (MIT). A banner labels the data as synthetic. The look follows lorenzokamanzi.com: black and white, Inter, square corners.
-- **API** (`app/`): run a backtest (optionally with its unmanaged baseline), list and compare runs, run a regime analysis, and describe the data. Invalid input gets a 400 with the reason. See [docs/api.md](docs/api.md).
-- **Storage**: SQLAlchemy models (`app/models/database.py`), with SQLite locally and PostgreSQL in Docker. Alembic migrations (`migrations/`) own the schema: money in `NUMERIC(18, 4)`, timestamps in `TIMESTAMPTZ`, CHECK constraints on the status columns and trade side, and a unique index on `equity_curve(backtest_run_id, timestamp)`. See [docs/database.md](docs/database.md) for the type choices.
+  - the closed trades of both runs, and the run history with each run's data source.
+  Charts use Recharts (MIT). The banner comes from the run's recorded source: "Market data" only when the service reported Alpaca data for every symbol, "Synthetic data" or "Partly synthetic data" otherwise. The look follows lorenzokamanzi.com: black and white, Inter, square corners.
+- **API** (`app/`): run a backtest (optionally with its unmanaged baseline), list and compare runs, run a regime analysis, and describe the data source. Every run's `data` object says where its bars came from. Invalid input gets a 400 with the reason; a market-data failure gets a 502. See [docs/api.md](docs/api.md).
+- **Storage**: SQLAlchemy models (`app/models/database.py`), with SQLite locally and PostgreSQL in Docker. Alembic migrations (`migrations/`) own the schema: money in `NUMERIC(18, 4)`, timestamps in `TIMESTAMPTZ`, CHECK constraints on the status columns, trade side and data-source labels, and a unique index on `equity_curve(backtest_run_id, timestamp)`. See [docs/database.md](docs/database.md) for the type choices.
 - **Paper trading** (`live_trading/`): an alpaca-py adapter and a `LiveTrader` that runs any of the strategies, optionally with the risk layer. Paper trading is the default; live trading needs both `paper=False` and `QUANT_ALLOW_LIVE_TRADING=yes`. See [docs/live-trading.md](docs/live-trading.md).
 
 ## Tests and CI
 
-There are 182 pytest tests (`pytest --collect-only -q`) and 20 frontend tests (vitest). The pytest tests cover:
+There are 302 pytest tests (`pytest --collect-only -q`) and 27 frontend tests (vitest). The pytest tests cover:
 
 - the data generator: cross-process determinism under different `PYTHONHASHSEED` values, and that the committed CSV matches the generator
 - the Markov chain: empirical transition frequencies and mean regime durations against the matrix
@@ -130,12 +151,17 @@ There are 182 pytest tests (`pytest --collect-only -q`) and 20 frontend tests (v
 - the Alembic migrations, on SQLite and PostgreSQL: upgrade to head and downgrade to base, the models matching the head revision, the CHECK constraints and unique index rejecting bad rows, adopting a database created before Alembic, and existing rows surviving the type changes
 - the paper-trading adapter, with fake clients
 - that the results report is reproducible
+- the market-data client against an in-process fake of the service and real sockets: pagination, retries and backoff, `Retry-After`, timeouts, error mapping, contract violations; and its parser against responses recorded from the real service
+- the bar cache: hits, fetching only missing ranges, re-based series, the settle window, source changes
+- what each run records about its data, through the API: synthetic, Alpaca and mixed data, baseline pairs, 400s and 502s; and that `make results-real` only says "real" for Alpaca data
 
-51 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. A separate job type-checks, tests (vitest: formatting, drawdown maths, the API client, the form, the comparison table, the whole page against a mocked API) and builds the frontend on Node 24. mypy runs on the engine as an advisory step and does not fail the build.
+68 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. A separate job type-checks, tests (vitest: formatting, drawdown maths, the API client, the form, the comparison table, the data-source banner, the whole page against a mocked API) and builds the frontend on Node 24. No test needs a running market-data service. mypy runs on the engine as an advisory step and does not fail the build.
 
 ## Limitations
 
-- **Synthetic data only.** Symbols are independent given the shared regime, there are no fat tails within a regime, and the calendar is business days (holidays included). The results describe one simulated path (seed 42).
+- **No real-data results yet.** The published results use the synthetic data: symbols are independent given the shared regime, there are no fat tails within a regime, and the calendar is business days (holidays included). They describe one simulated path (seed 42). The market-data path is tested against a fake service and was run end to end against a local market-data stack with synthetic data only.
+- **Public display of Alpaca data needs Alpaca's written consent.** A public deployment should stay on synthetic data until then.
+- **The cache can miss a late backfill.** A date range the service once answered without bars stays complete in the cache, so bars the service backfills more than 7 days later need `python -m data_sources cache clear` (the API has no way to signal it; see [docs/market-data.md](docs/market-data.md#gaps-in-the-market-data-api)).
 - **Optimistic fills.** Orders fill at the close of the bar that produced the signal, which assumes you can trade at a price only known at the close. There are no commissions, slippage, partial fills or shorting.
 - **Idle cash earns nothing**, while Sharpe subtracts a 2% risk-free rate.
 - **No cooldown after a stop-loss.** A strategy can re-enter on the same bar it was stopped out.
@@ -146,6 +172,7 @@ There are 182 pytest tests (`pytest --collect-only -q`) and 20 frontend tests (v
 ## Docs
 
 - [docs/data.md](docs/data.md): the synthetic data model, its parameters and how it is tested
+- [docs/market-data.md](docs/market-data.md): the market-data source: client, cache and its invalidation rule, labelling, `make results-real`
 - [docs/results.md](docs/results.md): benchmark backtests (generated)
 - [docs/benchmark.md](docs/benchmark.md): timings (generated)
 - [docs/api.md](docs/api.md): REST API
@@ -155,7 +182,7 @@ There are 182 pytest tests (`pytest --collect-only -q`) and 20 frontend tests (v
 
 ## Deploying
 
-The `Dockerfile` builds the whole app: the frontend in a Node stage, then the Python image that serves it. The app runs under gunicorn and reads `DATABASE_URL` and `SECRET_KEY` from the environment (see `.env.example`). `render.yaml`, `Procfile` and `runtime.txt` predate the frontend and install only the Python side, so they would serve the API without the UI. It is not deployed anywhere at the moment.
+The `Dockerfile` builds the whole app: the frontend in a Node stage, then the Python image that serves it. The app runs under gunicorn and reads `DATABASE_URL`, `SECRET_KEY` and the data-source settings from the environment (see `.env.example`). `render.yaml`, `Procfile` and `runtime.txt` predate the frontend and install only the Python side, so they would serve the API without the UI. It is not deployed anywhere at the moment.
 
 ## License
 

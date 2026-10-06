@@ -5,6 +5,7 @@ Alembic migrations, on SQLite and on a real PostgreSQL (see conftest.py).
 - the models match the head revision (no autogenerate diff)
 - the CHECK constraints and the unique equity-curve index reject bad rows
 - a pre-Alembic database is adopted (stamped 0001, then upgraded)
+- 0004: the data-provenance CHECK constraints, and older runs labelled synthetic
 - PostgreSQL only: the column types, and that existing rows survive the
   FLOAT -> NUMERIC and TIMESTAMP -> TIMESTAMPTZ conversion and its downgrade
 """
@@ -62,7 +63,7 @@ def insert_run(conn, status='completed'):
 
 
 def test_head_is_the_latest_revision():
-    assert HEAD == '0003'
+    assert HEAD == '0004'
 
 
 def test_upgrade_to_head_and_downgrade_to_base(db_engine):
@@ -200,3 +201,52 @@ def test_postgres_existing_rows_survive_the_type_changes(postgres_url):
         assert point.equity == pytest.approx(100123.4568)
     finally:
         engine.dispose()
+
+
+PROVENANCE = ("UPDATE backtest_runs SET data_source = :data_source, reported_source = :reported_source, "
+              "price_adjustment = :price_adjustment WHERE id = 1")
+
+
+@pytest.mark.parametrize('values', [
+    {'data_source': 'csv', 'reported_source': 'synthetic', 'price_adjustment': None},
+    {'data_source': 'market-data', 'reported_source': 'real', 'price_adjustment': 'split'},
+    {'data_source': 'synthetic', 'reported_source': 'alpaca', 'price_adjustment': None},
+    {'data_source': 'market-data', 'reported_source': 'alpaca', 'price_adjustment': 'dividend'},
+], ids=['unknown-source', 'unknown-reported', 'local-claims-alpaca', 'unknown-adjustment'])
+def test_provenance_constraints_reject_bad_labels(db_engine, values):
+    migrate(db_engine, 'upgrade', 'head')
+    with db_engine.begin() as conn:
+        insert_run(conn)
+        # valid labels go through
+        for ok in ({'data_source': 'market-data', 'reported_source': 'alpaca', 'price_adjustment': 'split'},
+                   {'data_source': 'market-data', 'reported_source': 'mixed', 'price_adjustment': 'raw'},
+                   {'data_source': 'synthetic', 'reported_source': 'synthetic', 'price_adjustment': None}):
+            conn.execute(text(PROVENANCE), ok)
+    with pytest.raises(IntegrityError):
+        with db_engine.begin() as conn:
+            conn.execute(text(PROVENANCE), values)
+
+
+def test_runs_from_before_0004_are_labelled_synthetic(db_engine):
+    migrate(db_engine, 'upgrade', '0003')
+    with db_engine.begin() as conn:
+        insert_run(conn)
+    migrate(db_engine, 'upgrade', 'head')
+    with db_engine.connect() as conn:
+        row = conn.execute(text('SELECT data_source, reported_source, symbol_sources, price_adjustment '
+                                'FROM backtest_runs')).one()
+    assert tuple(row) == ('synthetic', 'synthetic', None, None)
+
+    migrate(db_engine, 'downgrade', '0003')
+    with db_engine.connect() as conn:
+        assert conn.execute(text('SELECT initial_capital FROM backtest_runs')).scalar() == 100000
+
+
+def test_provenance_values_match_what_the_code_writes():
+    from app.models.database import DATA_SOURCES, PRICE_ADJUSTMENTS, REPORTED_SOURCES
+    from data_sources import sources
+    from data_sources.market_data import ADJUSTMENTS
+
+    assert DATA_SOURCES == sources.DATA_SOURCES
+    assert REPORTED_SOURCES == sources.REPORTED_SOURCES
+    assert PRICE_ADJUSTMENTS == ADJUSTMENTS

@@ -21,9 +21,18 @@ services:
     environment:
       DATABASE_URL: postgresql://quant_user:quant_pass@db:5432/quant_db
       FLASK_ENV: production
+      # Data source (docs/market-data.md). Unset: the synthetic sample file.
+      # `make run-market-data` points MARKET_DATA_URL at the service below.
+      QUANT_DATA_SOURCE: ${QUANT_DATA_SOURCE:-}
+      MARKET_DATA_URL: ${MARKET_DATA_URL:-}
+      MARKET_DATA_API_KEY: ${MARKET_DATA_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
+      # Only with the market-data profile; ignored otherwise
+      market-data:
+        condition: service_healthy
+        required: false
     volumes:
       - ./data:/app/data
     # init_db.py runs `alembic upgrade head` and seeds, once, before the workers start
@@ -31,5 +40,52 @@ services:
       sh -c "python init_db.py &&
              gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 300 app.main:app"
 
+  # Optional market-data stack for local end-to-end runs: `make run-market-data`.
+  # Built from a checkout of lokaz-c/market-data next to this one (MARKET_DATA_DIR,
+  # default ../market-data). It gets no Alpaca keys and serves only its own
+  # synthetic demo data (symbols S001-S050, every one labelled source=synthetic),
+  # so every run on it is labelled synthetic.
+  market-data-db:
+    profiles: [market-data]
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: marketdata
+      POSTGRES_USER: marketdata
+      POSTGRES_PASSWORD: marketdata
+    volumes:
+      - market_data_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketdata -d marketdata"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  market-data:
+    profiles: [market-data]
+    build: ${MARKET_DATA_DIR:-../market-data}
+    depends_on:
+      market-data-db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://market-data-db:5432/marketdata
+      SPRING_DATASOURCE_USERNAME: marketdata
+      SPRING_DATASOURCE_PASSWORD: marketdata
+      # Synthetic only: no Alpaca keys, and only synthetic symbols are public
+      ALPACA_API_KEY_ID: ""
+      ALPACA_API_SECRET_KEY: ""
+      DEMO_SEED: always
+      PUBLIC_DATA_SOURCES: synthetic
+      INGEST_SCHEDULE_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${MARKET_DATA_PORT:-8080}:8080"
+    healthcheck:
+      # Ready once the synthetic data is seeded
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+
 volumes:
   postgres_data:
+  market_data_pgdata:

@@ -22,6 +22,7 @@ New migration: change the models, then `alembic revision --autogenerate -m "..."
 | `0001` | Baseline: the schema `db/init.sql` used to create. On PostgreSQL, `pg_dump --schema-only` of a database built by `alembic upgrade 0001` is identical to one built by the old `init.sql` (checked before `init.sql` was deleted). |
 | `0002` | Money columns to `NUMERIC`, timestamps to `TIMESTAMPTZ`, CHECK constraints, and a unique index on `equity_curve(backtest_run_id, timestamp)`. |
 | `0003` | `backtest_runs.strategy_parameters` (the parameters a run used: the stored defaults merged with the request's overrides) and `backtest_runs.baseline_run_id` (a self-reference to the unmanaged run on the same inputs, `ON DELETE SET NULL`). Existing rows get `NULL`. |
+| `0004` | Where a run's bars came from: `backtest_runs.data_source` (`synthetic` for the local file, `market-data` for the service), `reported_source` (what the service said: `alpaca`, `synthetic`, or `mixed` across symbols), `symbol_sources` (per symbol) and `price_adjustment` (`split` or `raw`). Every earlier run used the local file, so existing rows get `synthetic` for both. See [market-data.md](market-data.md). |
 
 ## Column types
 
@@ -49,6 +50,12 @@ CHECK constraints list exactly the values the code writes:
 | `ck_backtest_runs_status` | `pending`, `running`, `completed`, `failed` | the column default; `BacktestService.run_backtest` |
 | `ck_trades_side` | `buy`, `sell` | `Portfolio` (stored trades are closed round trips, so `sell`) |
 | `ck_trades_status` | `open`, `closed` | `Portfolio` (only `closed` is stored) |
+| `ck_backtest_runs_data_source` | `synthetic`, `market-data` | `Provenance` in `data_sources/sources.py` |
+| `ck_backtest_runs_reported_source` | `synthetic`, `alpaca`, `mixed` | `Provenance`, from the service's per-symbol `source` |
+| `ck_backtest_runs_price_adjustment` | `split`, `raw`, or `NULL` (local file) | `Provenance` |
+| `ck_backtest_runs_local_is_synthetic` | `data_source = 'market-data' OR reported_source = 'synthetic'` | the local generator can't be labelled Alpaca |
+
+`data_source` and `reported_source` default to `synthetic`, so a writer that leaves them out labels a run synthetic, never real.
 
 `ix_equity_curve_run_timestamp` is a unique index on `equity_curve(backtest_run_id, timestamp)`. It is unique because the engine records exactly one equity point per bar, so a duplicate would mean a bug, and it would distort any metric computed from the curve. It is the access path for loading a run's curve in time order. It replaces the single-column `idx_equity_curve_run`, which it makes redundant: a B-tree on `(a, b)` also serves lookups on `a`.
 
@@ -70,6 +77,7 @@ SQLite is supported for local development (`make dev`) and the default test run.
 - the models match the head revision;
 - each CHECK constraint and the unique index reject a bad row, and the same statement with valid values succeeds;
 - a pre-Alembic database is stamped and upgraded with its rows intact;
+- the provenance constraints reject unknown or contradictory labels, and runs from before `0004` read as synthetic;
 - PostgreSQL only: the column types after the upgrade, and that existing rows survive the upgrade and the downgrade (values rounded to the new scale, timestamps unchanged).
 
-The API tests in `tests/test_api.py` also run on both databases. `make test-pg` starts a throwaway `postgres:15-alpine` container and runs the whole suite against it. CI uses a PostgreSQL service container and sets `QUANT_REQUIRE_POSTGRES=1`, so a missing database fails the build instead of skipping the tests.
+The API tests in `tests/test_api.py` and `tests/test_api_data_source.py` also run on both databases. `make test-pg` starts a throwaway `postgres:15-alpine` container and runs the whole suite against it. CI uses a PostgreSQL service container and sets `QUANT_REQUIRE_POSTGRES=1`, so a missing database fails the build instead of skipping the tests.

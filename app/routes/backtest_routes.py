@@ -2,8 +2,8 @@
 Backtest API routes
 """
 from flask import Blueprint, request, jsonify
-from app.routes.errors import server_error
-from app.services.backtest_service import BacktestService, InvalidRequest
+from app.routes.errors import bad_gateway, server_error
+from app.services.backtest_service import BacktestService, DataSourceUnavailable, InvalidRequest
 
 bp = Blueprint('backtest', __name__, url_prefix='/api/backtest')
 
@@ -22,11 +22,14 @@ def run_backtest():
         "initial_capital": 100000,
         "symbols": ["AAPL", "GOOGL"],
         "parameters": {"fast_period": 10},      # optional overrides
-        "compare_to_baseline": true             # optional
+        "compare_to_baseline": true,            # optional
+        "data_source": "market-data"            # optional: synthetic | market-data
     }
 
-    The prices come from the synthetic sample dataset; the response's `data`
-    field says so. Invalid input is a 400 with the reason.
+    The response's `data` object says where the bars came from: the local
+    synthetic generator, or the market-data service and the source it
+    reported for each symbol. Invalid input is a 400 with the reason; a
+    market-data failure is a 502.
     """
     try:
         data = request.get_json(silent=True)
@@ -49,13 +52,16 @@ def run_backtest():
             symbols=data.get('symbols'),
             market_regime=data.get('market_regime'),
             parameters=data.get('parameters'),
-            compare_to_baseline=bool(data.get('compare_to_baseline', False))
+            compare_to_baseline=bool(data.get('compare_to_baseline', False)),
+            data_source=data.get('data_source')
         )
 
         return jsonify(result), 200
 
     except InvalidRequest as e:
         return jsonify({'error': str(e)}), 400
+    except DataSourceUnavailable as e:
+        return bad_gateway(e)
     except Exception:
         return server_error()
 
@@ -126,7 +132,9 @@ def compare_backtests():
 @bp.route('/regime-analysis', methods=['POST'])
 def regime_analysis():
     """
-    Run one backtest and split its daily returns by the generator's regime labels
+    Run one backtest and split its daily returns by the generator's regime labels.
+    Only the synthetic data has regime labels; with market-data as the default
+    source, send "data_source": "synthetic".
 
     Expected JSON (dates default to the full dataset):
     {
@@ -152,7 +160,8 @@ def regime_analysis():
             initial_capital=data['initial_capital'],
             symbols=data.get('symbols'),
             start_date=data.get('start_date'),
-            end_date=data.get('end_date')
+            end_date=data.get('end_date'),
+            data_source=data.get('data_source')
         )
 
         return jsonify(result), 200

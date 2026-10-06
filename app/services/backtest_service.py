@@ -4,10 +4,11 @@ Handles business logic for running and managing backtests
 """
 import os
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 from app.models.database import (
-    get_db, Strategy, RiskConfig, BacktestRun,
+    get_db, utcnow, Strategy, RiskConfig, BacktestRun,
     BacktestMetrics, EquityCurve, Trade
 )
 from backtest_engine.data_loader import DataLoader
@@ -29,6 +30,20 @@ DATA_SOURCE = {
     'description': ('Synthetic daily bars from a seeded Markov regime-switching GBM '
                     '(config/data_generator.json). Ticker names are labels only.'),
 }
+
+
+def _num(value: Union[Decimal, float, None]) -> Optional[float]:
+    """
+    NUMERIC columns come back as Decimal. The API returns JSON numbers, so
+    convert at this boundary (Flask would otherwise serialise a Decimal as a
+    string). The exact values stay in the database.
+    """
+    return None if value is None else float(value)
+
+
+def _iso(value: Optional[datetime]) -> Optional[str]:
+    """ISO 8601 with the UTC offset, e.g. 2023-01-03T00:00:00+00:00"""
+    return value.isoformat() if value is not None else None
 
 
 class BacktestService:
@@ -120,7 +135,7 @@ class BacktestService:
                 # Update run status
                 backtest_run = db.query(BacktestRun).filter(BacktestRun.id == backtest_id).first()
                 backtest_run.status = 'completed'
-                backtest_run.completed_at = datetime.utcnow()
+                backtest_run.completed_at = utcnow()
 
                 # Store metrics (only fields that exist in the database model)
                 metrics_data = results['metrics']
@@ -214,11 +229,11 @@ class BacktestService:
                 'risk_config': backtest_run.risk_config.name,
                 'start_date': backtest_run.start_date.isoformat(),
                 'end_date': backtest_run.end_date.isoformat(),
-                'initial_capital': backtest_run.initial_capital,
+                'initial_capital': _num(backtest_run.initial_capital),
                 'symbols': backtest_run.symbols,
                 'market_regime': backtest_run.market_regime,
                 'status': backtest_run.status,
-                'created_at': backtest_run.created_at.isoformat(),
+                'created_at': _iso(backtest_run.created_at),
                 'metrics': {
                     'total_return': metrics.total_return,
                     'cagr': metrics.cagr,
@@ -226,30 +241,30 @@ class BacktestService:
                     'volatility': metrics.volatility,
                     'sharpe_ratio': metrics.sharpe_ratio,
                     'win_rate': metrics.win_rate,
-                    'avg_win': metrics.avg_win,
-                    'avg_loss': metrics.avg_loss,
+                    'avg_win': _num(metrics.avg_win),
+                    'avg_loss': _num(metrics.avg_loss),
                     'num_trades': metrics.num_trades,
-                    'final_equity': metrics.final_equity
+                    'final_equity': _num(metrics.final_equity)
                 } if metrics else None,
                 'equity_curve': [
                     {
-                        'timestamp': point.timestamp.isoformat(),
-                        'equity': point.equity,
-                        'cash': point.cash,
-                        'positions_value': point.positions_value
+                        'timestamp': _iso(point.timestamp),
+                        'equity': _num(point.equity),
+                        'cash': _num(point.cash),
+                        'positions_value': _num(point.positions_value)
                     }
                     for point in equity_curve
                 ],
                 'trades': [
                     {
                         'symbol': t.symbol,
-                        'entry_date': t.entry_date.isoformat(),
-                        'exit_date': t.exit_date.isoformat() if t.exit_date else None,
-                        'entry_price': t.entry_price,
-                        'exit_price': t.exit_price,
-                        'quantity': t.quantity,
+                        'entry_date': _iso(t.entry_date),
+                        'exit_date': _iso(t.exit_date),
+                        'entry_price': _num(t.entry_price),
+                        'exit_price': _num(t.exit_price),
+                        'quantity': _num(t.quantity),
                         'side': t.side,
-                        'pnl': t.pnl,
+                        'pnl': _num(t.pnl),
                         'pnl_pct': t.pnl_pct,
                         'status': t.status
                     }
@@ -286,7 +301,7 @@ class BacktestService:
                     'total_return': metrics.total_return if metrics else None,
                     'max_drawdown': metrics.max_drawdown if metrics else None,
                     'sharpe_ratio': metrics.sharpe_ratio if metrics else None,
-                    'created_at': bt.created_at.isoformat()
+                    'created_at': _iso(bt.created_at)
                 })
 
         return result

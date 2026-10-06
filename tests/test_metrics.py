@@ -150,3 +150,27 @@ def test_returns_by_regime_attributes_each_day_to_its_regime():
     assert result['bull']['compounded_return_pct'] == pytest.approx(10.0)
     assert result['bear']['days'] == 2
     assert result['bear']['compounded_return_pct'] == pytest.approx(-10.0)
+
+
+def test_decimal_equity_gives_the_same_metrics_as_float():
+    # A stored run's equity comes back from NUMERIC columns as Decimal
+    from decimal import Decimal
+    values = ['100000.0000', '101250.5000', '99800.2500', '102400.7500', '101900.0000']
+    dates = pd.bdate_range('2023-01-02', periods=len(values))
+    as_float = [{'timestamp': d, 'equity': float(v)} for d, v in zip(dates, values)]
+    as_decimal = [{'timestamp': d, 'equity': Decimal(v)} for d, v in zip(dates, values)]
+    trades = [{'status': 'closed', 'pnl': Decimal('12.5')}, {'status': 'closed', 'pnl': Decimal('-3')}]
+
+    expected = PerformanceMetrics(as_float, [{**t, 'pnl': float(t['pnl'])} for t in trades], 100000).calculate_all()
+    assert PerformanceMetrics(as_decimal, trades, 100000).calculate_all() == pytest.approx(expected)
+
+
+def test_returns_by_regime_matches_utc_timestamps_to_naive_dates():
+    # Stored runs have ISO timestamps with +00:00; the data file's dates are naive
+    from backtest_engine.metrics import returns_by_regime
+    curve = [{'timestamp': f'2023-01-0{d}T00:00:00+00:00', 'equity': e}
+             for d, e in [(2, 100.0), (3, 110.0), (4, 99.0)]]
+    labels = {pd.Timestamp('2023-01-03'): 'bull', pd.Timestamp('2023-01-04'): 'bear'}
+    result = returns_by_regime(curve, labels)
+    assert result['bull']['compounded_return_pct'] == pytest.approx(10.0)
+    assert result['bear']['compounded_return_pct'] == pytest.approx(-10.0)

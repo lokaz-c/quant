@@ -21,6 +21,7 @@ New migration: change the models, then `alembic revision --autogenerate -m "..."
 | --- | --- |
 | `0001` | Baseline: the schema `db/init.sql` used to create. On PostgreSQL, `pg_dump --schema-only` of a database built by `alembic upgrade 0001` is identical to one built by the old `init.sql` (checked before `init.sql` was deleted). |
 | `0002` | Money columns to `NUMERIC`, timestamps to `TIMESTAMPTZ`, CHECK constraints, and a unique index on `equity_curve(backtest_run_id, timestamp)`. |
+| `0003` | `backtest_runs.strategy_parameters` (the parameters a run used: the stored defaults merged with the request's overrides) and `backtest_runs.baseline_run_id` (a self-reference to the unmanaged run on the same inputs, `ON DELETE SET NULL`). Existing rows get `NULL`. |
 
 ## Column types
 

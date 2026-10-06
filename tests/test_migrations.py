@@ -62,7 +62,7 @@ def insert_run(conn, status='completed'):
 
 
 def test_head_is_the_latest_revision():
-    assert HEAD == '0002'
+    assert HEAD == '0003'
 
 
 def test_upgrade_to_head_and_downgrade_to_base(db_engine):

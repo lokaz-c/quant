@@ -42,7 +42,7 @@ flowchart LR
     migrations["Alembic migrations"] --> db
     db --> sqlcheck["sql/metrics.sql<br/>window functions"]
     sqlcheck -. "CI: must match" .-> metrics
-    api["Flask REST API"] --> service
+    api["Flask REST API<br/>rate limits, caps, API key"] --> service
     ui["React + TypeScript (Vite)<br/>banner from each run's recorded source"] --> api
     strategies --> trader["LiveTrader"]
     risk --> trader
@@ -83,7 +83,7 @@ For frontend work, run `make frontend-dev` next to `make dev`. It serves the app
 
 To run on bars from the market-data service, set `MARKET_DATA_URL` (and `MARKET_DATA_API_KEY` for Alpaca symbols); the other settings are in `.env.example` and [docs/market-data.md](docs/market-data.md). `make run-market-data` starts quant next to a local market-data stack built from `../market-data`. That stack has no Alpaca keys, so it serves only synthetic symbols (S001-S050), and the app labels every run on it synthetic.
 
-`make help` lists the other targets: `frontend`, `migrate`, `test-pg`, `sql-check`, `data`, `results`, `results-real`, `bench`, `down`, `db-shell`.
+`make help` lists the other targets: `frontend`, `migrate`, `test-pg`, `sql-check`, `data`, `results`, `results-real`, `bench`, `deploy-check`, `down`, `db-shell`.
 
 ## Results
 
@@ -136,13 +136,14 @@ The machine was busy with other work during this run; its load average is record
   - the chosen profile against the same run with the risk layer off: metrics side by side, and equity and drawdown curves on shared axes;
   - the closed trades of both runs, and the run history with each run's data source.
   Charts use Recharts (MIT). The banner comes from the run's recorded source: "Market data" only when the service reported Alpaca data for every symbol, "Synthetic data" or "Partly synthetic data" otherwise. The look follows lorenzokamanzi.com: black and white, Inter, square corners.
-- **API** (`app/`): run a backtest (optionally with its unmanaged baseline), list and compare runs, run a regime analysis, and describe the data source. Every run's `data` object says where its bars came from. Invalid input gets a 400 with the reason; a market-data failure gets a 502. See [docs/api.md](docs/api.md).
+- **API** (`app/`): run a backtest (optionally with its unmanaged baseline), list and compare runs, run a regime analysis, and describe the data source. Every run's `data` object says where its bars came from. Errors are RFC 9457 problem details: invalid input gets a 400 with the reason, a market-data failure a 502. See [docs/api.md](docs/api.md).
+- **Public-deploy protection** (`app/config.py`, `app/protection.py`): a CORS allow-list from config, with no CORS headers by default; per-IP rate limits (Flask-Limiter, in memory) of 5 runs a minute and 30 an hour, against 120 reads a minute, with a 429 and `Retry-After` past them; an optional `X-API-Key`, stored as a SHA-256 digest, that lifts the limits for server-side clients such as TradeDesk; and caps of 10 symbols, 1,827 days, 90 s and one run at a time per request. All are environment settings. [docs/api.md](docs/api.md#limits-rate-limits-and-api-keys) explains the choices and the single-instance caveat.
 - **Storage**: SQLAlchemy models (`app/models/database.py`), with SQLite locally and PostgreSQL in Docker. Alembic migrations (`migrations/`) own the schema: money in `NUMERIC(18, 4)`, timestamps in `TIMESTAMPTZ`, CHECK constraints on the status columns, trade side and data-source labels, and a unique index on `equity_curve(backtest_run_id, timestamp)`. See [docs/database.md](docs/database.md) for the type choices.
 - **Paper trading** (`live_trading/`): an alpaca-py adapter and a `LiveTrader` that runs any of the strategies, optionally with the risk layer. Paper trading is the default; live trading needs both `paper=False` and `QUANT_ALLOW_LIVE_TRADING=yes`. See [docs/live-trading.md](docs/live-trading.md).
 
 ## Tests and CI
 
-There are 351 pytest tests (`pytest --collect-only -q`) and 29 frontend tests (vitest). The pytest tests cover:
+There are 400 pytest tests (`pytest --collect-only -q`) and 32 frontend tests (vitest). The pytest tests cover:
 
 - the data generator: cross-process determinism under different `PYTHONHASHSEED` values, and that the committed CSV matches the generator
 - the Markov chain: empirical transition frequencies and mean regime durations against the matrix
@@ -156,8 +157,10 @@ There are 351 pytest tests (`pytest --collect-only -q`) and 29 frontend tests (v
 - the bar cache: hits, fetching only missing ranges, re-based series, the settle window, source changes
 - what each run records about its data, through the API: synthetic, Alpaca and mixed data, baseline pairs, 400s and 502s; and that `make results-real` only says "real" for Alpaca data
 - undefined metrics: `null` with the reason in every response that carries metrics, `NULL` in the database, and strict JSON both ways (a response with `Infinity` is a 500; a request with `NaN` or `1e400` is a 400)
+- public-deploy protection: the CORS allow-list, 429s with `Retry-After` per client address and per endpoint group, the client-address header, the API key (lifts the limits, a wrong key is a 401), each request cap, the time limit (504, run stored as failed), the run slot (503), problem bodies for Flask's own errors, and the settings' validation
+- the deploy files: gunicorn's bind and process model, the Render blueprint, and `/health` answering without the database
 
-81 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. A separate job type-checks, tests (vitest: formatting, drawdown maths, the API client, the form, the comparison table and run history with undefined metrics, the data-source banner, the whole page against a mocked API) and builds the frontend on Node 24. No test needs a running market-data service. mypy runs on the engine as an advisory step and does not fail the build.
+81 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. A separate job type-checks, tests (vitest: formatting, drawdown maths, the API client and its problem and 429 messages, the form and the server's caps, the comparison table and run history with undefined metrics, the data-source banner, the whole page against a mocked API) and builds the frontend on Node 24. No test needs a running market-data service. mypy runs on the engine as an advisory step and does not fail the build.
 
 ## Limitations
 
@@ -167,7 +170,8 @@ There are 351 pytest tests (`pytest --collect-only -q`) and 29 frontend tests (v
 - **Optimistic fills.** Orders fill at the close of the bar that produced the signal, which assumes you can trade at a price only known at the close. There are no commissions, slippage, partial fills or shorting.
 - **Idle cash earns nothing**, while Sharpe subtracts a 2% risk-free rate.
 - **No cooldown after a stop-loss.** A strategy can re-enter on the same bar it was stopped out.
-- **Runtime grows with history.** Every bar re-filters the data and recomputes indicators over the full history (see the benchmark). A backtest runs inside the HTTP request (two with the baseline on), and gunicorn's timeout is 300 s.
+- **Runtime grows with history.** Every bar re-filters the data and recomputes indicators over the full history (see the benchmark). A backtest runs inside the HTTP request (two with the baseline on) and is stopped after 90 s. On Render's free 0.1 CPU this is slow: the form's default request took about a minute in `make deploy-check` (see [Deploying](#deploying)). Computing indicators once per run instead of once per bar is the fix; it isn't done yet.
+- **Rate limits are per process.** The counters are in memory, which is exact for the one gunicorn process on one instance that the image runs. More processes or instances need a shared store (`QUANT_RATE_LIMIT_STORAGE_URI`). There is no async run endpoint; see [docs/api.md](docs/api.md#limits-rate-limits-and-api-keys).
 - **Paper trading is only tested against fake clients.** It has not been run against a funded account.
 - **Risk profiles are hand-picked**, not fitted. mypy is advisory, not enforced.
 
@@ -184,7 +188,43 @@ There are 351 pytest tests (`pytest --collect-only -q`) and 29 frontend tests (v
 
 ## Deploying
 
-The `Dockerfile` builds the whole app: the frontend in a Node stage, then the Python image that serves it. The app runs under gunicorn and reads `DATABASE_URL`, `SECRET_KEY` and the data-source settings from the environment (see `.env.example`). `render.yaml`, `Procfile` and `runtime.txt` predate the frontend and install only the Python side, so they would serve the API without the UI. It is not deployed anywhere at the moment.
+Not deployed yet. One Docker image serves both the API and the frontend. A Node 24 stage builds `frontend/dist`, and the Python stage serves it under gunicorn: one process with four threads (`gunicorn.conf.py`). On start the container runs `python init_db.py`, which is `alembic upgrade head` plus seeding an empty database, and then gunicorn. Render's free instances have no pre-deploy command, so the migration runs in the start command. `/health` touches no database, so Render's health checks, which arrive every few seconds, never keep the database awake. [`render.yaml`](render.yaml) is a Render Blueprint for this image. It does nothing until someone creates a Blueprint from it in the dashboard.
+
+The recommended free setup matches [market-data](https://github.com/lokaz-c/market-data#deploy-not-active): a Render free web service plus Neon free PostgreSQL. Render's free PostgreSQL databases expire after 30 days, so the database is on Neon. Neon's free plan includes 100 CU-hours of compute and 1 GB of storage per project. Render gives a workspace 750 free instance hours a month, and a free instance has 0.1 CPU and 512 MB (Render and Neon docs, checked 2026-10-05).
+
+**Steps for Lorenzo** (they need two accounts, so I haven't done them):
+
+1. **Neon.** Create a project at https://console.neon.tech with PostgreSQL 17 or 18 (the PostgreSQL tests pass on 15 and 18) in region AWS us-west-2 (Oregon), next to Render's Oregon region. Under "Connect", copy the connection string for the direct (non-pooler) host. It looks like `postgresql://<user>:<password>@<host>/neondb?sslmode=require&channel_binding=require`.
+2. **API key for TradeDesk (optional).** Make a key and its digest. The key goes to TradeDesk as a secret; only the digest goes to Render:
+   ```bash
+   KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+   printf %s "$KEY" | shasum -a 256 | cut -d' ' -f1   # QUANT_API_KEY_SHA256
+   ```
+3. **Render.** Sign in at https://dashboard.render.com with GitHub, then choose New > Blueprint, pick `lokaz-c/quant` and keep the Blueprint path `render.yaml`. Fill in the prompted variables:
+
+   | Variable | Value |
+   | --- | --- |
+   | `DATABASE_URL` | the Neon connection string from step 1 (required: without it the app uses SQLite inside the container, which is wiped on every restart) |
+   | `QUANT_API_KEY_SHA256` | the digest from step 2, or empty |
+   | `QUANT_CORS_ORIGINS` | empty, unless a site on another origin calls the API from the browser, e.g. `https://lorenzokamanzi.com` |
+   | `MARKET_DATA_URL` | optional: the market-data service's URL, offered as a second data source |
+   | `MARKET_DATA_API_KEY` | empty for the public demo: with a key the service also serves Alpaca data, which needs Alpaca's written consent to display |
+
+   The blueprint fixes the rest: `plan: free`, `region: oregon`, `QUANT_DATA_SOURCE=synthetic`, `QUANT_CLIENT_IP_HEADER=CF-Connecting-IP` (Cloudflare overwrites that header on every request to Render, so rate limits see the real client address) and a generated `SECRET_KEY`. Render then builds the Dockerfile, and later deploys from `main` once CI passes (`autoDeployTrigger: checksPass`).
+4. **Check it.** Open `https://quant-portfolio-simulator.onrender.com` (the service name in `render.yaml`; Render shows the actual URL) and run a backtest. Then add the URL to this README, the repo's About section and TradeDesk's `QUANT_API_URL`.
+
+**What to expect on the free tier.** Render stops the service after 15 minutes without traffic and takes about a minute to start it again. The container then needs about half a minute more to migrate and start (31 s in the check below). Neon suspends the database after 5 minutes idle and starts it again on the next connection. The service is a single 0.1 CPU, 512 MB instance, and backtests are CPU-bound. `make deploy-check` builds the image and runs it with those limits (`--cpus 0.1 --memory 512m`, `PORT=10000`). On an M1 Pro under Docker Desktop it printed:
+
+```
+ready (migrations, seed, gunicorn) after 31 s
+/: 200, the React app
+/api/data: synthetic, 25 symbols, limits {'max_symbols': 10, 'max_range_days': 1827, 'timeout_seconds': 90.0}
+default run (5 symbols, 2023, with baseline): HTTP 200 in 52.653925 s
+/health during the run: 25 of 25 checks answered 200, slowest 0.36 s
+memory after the run: 100.4MiB / 512MiB
+```
+
+Render's CPUs may be slower than this host. `docker compose` (`make run`) runs the same image and command against PostgreSQL 15; it serves the app at `/` and the API at `/api`.
 
 ## License
 

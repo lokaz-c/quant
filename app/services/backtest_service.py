@@ -2,7 +2,9 @@
 Backtest service layer
 Handles business logic for running and managing backtests
 """
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional, Dict
 from app.models.database import (
     get_db, Strategy, RiskConfig, BacktestRun,
@@ -13,13 +15,26 @@ from backtest_engine.backtester import Backtester
 from backtest_engine.strategies.moving_average import MovingAverageCrossover
 from backtest_engine.strategies.rsi_strategy import RSIMeanReversion
 from backtest_engine.strategies.trend_following import TrendFollowing
+from backtest_engine.metrics import returns_by_regime
+from backtest_engine.regimes import RegimeModel
 from backtest_engine.risk import RiskConfig as EngineRiskConfig
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DATA_PATH = REPO_ROOT / 'data' / 'sample_data.csv'
+
+# Returned with every result so API clients cannot mistake the data for market prices
+DATA_SOURCE = {
+    'synthetic': True,
+    'file': 'data/sample_data.csv',
+    'description': ('Synthetic daily bars from a seeded Markov regime-switching GBM '
+                    '(config/data_generator.json). Ticker names are labels only.'),
+}
 
 
 class BacktestService:
     """Service for managing backtests"""
 
-    DATA_PATH = 'data/sample_data.csv'
+    DATA_PATH = os.getenv('DATA_PATH', str(DEFAULT_DATA_PATH))
 
     def __init__(self):
         self.strategy_map = {
@@ -157,7 +172,8 @@ class BacktestService:
                 'backtest_id': backtest_id,
                 'status': 'completed',
                 'metrics': results['metrics'],
-                'summary': results['final_portfolio']
+                'summary': results['final_portfolio'],
+                'data': DATA_SOURCE
             }
 
         except Exception as e:
@@ -238,7 +254,8 @@ class BacktestService:
                         'status': t.status
                     }
                     for t in trades
-                ]
+                ],
+                'data': DATA_SOURCE
             }
 
         return result
@@ -314,37 +331,48 @@ class BacktestService:
         strategy_name: str,
         risk_config_name: str,
         initial_capital: float,
-        symbols: Optional[List[str]] = None
+        symbols: Optional[List[str]] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
     ) -> Dict:
-        """Run backtests across different market regimes"""
+        """
+        Run one backtest and split its daily returns by market regime.
 
-        regimes = [
-            {'name': 'Bullish', 'start': '2023-01-01', 'end': '2023-08-31'},
-            {'name': 'Bearish', 'start': '2023-09-01', 'end': '2024-03-31'},
-            {'name': 'Sideways', 'start': '2024-04-01', 'end': '2024-12-31'}
-        ]
+        The regime of each day comes from the data's `regime` column, which the
+        synthetic generator writes. Data without that column is rejected.
+        """
+        data = DataLoader(self.DATA_PATH).load_csv(symbols)
+        if 'regime' not in data.columns:
+            raise ValueError('The data file has no regime column, so returns cannot be split by regime')
+        if data.empty:
+            raise ValueError('No data for the requested symbols')
 
-        results = []
+        start_date = start_date or data['timestamp'].min().strftime('%Y-%m-%d')
+        end_date = end_date or data['timestamp'].max().strftime('%Y-%m-%d')
 
-        for regime in regimes:
-            result = self.run_backtest(
-                strategy_name=strategy_name,
-                risk_config_name=risk_config_name,
-                start_date=regime['start'],
-                end_date=regime['end'],
-                initial_capital=initial_capital,
-                symbols=symbols,
-                market_regime=regime['name']
-            )
+        run = self.run_backtest(
+            strategy_name=strategy_name,
+            risk_config_name=risk_config_name,
+            start_date=start_date,
+            end_date=end_date,
+            initial_capital=initial_capital,
+            symbols=symbols
+        )
+        equity_curve = self.get_backtest_results(run['backtest_id'])['equity_curve']
 
-            results.append({
-                'regime': regime['name'],
-                'backtest_id': result['backtest_id'],
-                'metrics': result['metrics']
-            })
+        regime_by_date = data.drop_duplicates('timestamp').set_index('timestamp')['regime'].to_dict()
+        try:
+            regime_order = RegimeModel.from_json().names
+        except (OSError, ValueError, KeyError):
+            regime_order = None
 
         return {
             'strategy': strategy_name,
             'risk_config': risk_config_name,
-            'regimes': results
+            'backtest_id': run['backtest_id'],
+            'start_date': start_date,
+            'end_date': end_date,
+            'metrics': run['metrics'],
+            'by_regime': returns_by_regime(equity_curve, regime_by_date, regime_order),
+            'data': DATA_SOURCE
         }

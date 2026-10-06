@@ -52,9 +52,11 @@ class TrendFollowing(StrategyBase):
             if len(symbol_data) < self.lookback_period + 1:
                 continue
 
-            # Calculate indicators
-            symbol_data['highest'] = symbol_data['high'].rolling(window=self.lookback_period).max()
-            symbol_data['lowest'] = symbol_data['low'].rolling(window=self.lookback_period).min()
+            # Channel over the previous N bars. The current bar must be excluded:
+            # its high is >= its close and its low <= its close, so comparing the
+            # close with a window that includes it can never signal.
+            symbol_data['highest'] = symbol_data['high'].rolling(window=self.lookback_period).max().shift(1)
+            symbol_data['lowest'] = symbol_data['low'].rolling(window=self.lookback_period).min().shift(1)
             symbol_data['atr'] = self.calculate_atr(symbol_data, self.atr_period)
 
             # Get latest values
@@ -66,7 +68,7 @@ class TrendFollowing(StrategyBase):
             current_price = latest['close']
             has_position = symbol in portfolio.positions
 
-            # Buy signal: price breaks above recent high
+            # Buy signal: close breaks above the previous N-bar high
             if current_price > latest['highest'] and not has_position:
                 quantity = self.calculate_position_size(symbol, current_price, portfolio)
                 if quantity > 0:
@@ -81,7 +83,6 @@ class TrendFollowing(StrategyBase):
             elif has_position:
                 position = portfolio.positions[symbol]
 
-                # Trailing stop based on ATR
                 # Chandelier-style stop: trail below the lookback high, not the current price
                 stop_price = latest['highest'] - (latest['atr'] * self.atr_multiplier)
 

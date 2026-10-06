@@ -1,7 +1,7 @@
 {
   "moving_average_crossover": {
     "name": "Moving Average Crossover",
-    "description": "Generates buy signals when fast MA crosses above slow MA, sell when crosses below",
+    "description": "Buys when the fast MA crosses above the slow MA, sells when it crosses back below",
     "class": "MovingAverageCrossover",
     "parameters": {
       "fast_period": 20,
@@ -10,17 +10,17 @@
   },
   "rsi_mean_reversion": {
     "name": "RSI Mean Reversion",
-    "description": "Buys when RSI is oversold (<30), sells when overbought (>70)",
-    "class": "RSIStrategy",
+    "description": "Buys when RSI is below the oversold level, sells when it is above the overbought level",
+    "class": "RSIMeanReversion",
     "parameters": {
-      "period": 14,
-      "oversold_threshold": 30,
-      "overbought_threshold": 70
+      "rsi_period": 14,
+      "oversold": 30,
+      "overbought": 70
     }
   },
   "trend_following": {
     "name": "Trend Following",
-    "description": "Follows trends using price breakouts above recent highs with ATR-based stops",
+    "description": "Buys a close above the previous N-day high; exits below the previous N-day low or an ATR chandelier stop",
     "class": "TrendFollowing",
     "parameters": {
       "lookback_period": 20,

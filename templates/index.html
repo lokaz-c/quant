@@ -107,6 +107,12 @@
             font-size: 1rem;
         }
 
+        .data-note {
+            color: var(--text-tertiary);
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+
         /* ===== CONTROL PANEL ===== */
         .control-panel {
             background: var(--bg-secondary);
@@ -417,6 +423,14 @@
             border-bottom: none;
         }
 
+        .trades-table td.positive {
+            color: var(--success);
+        }
+
+        .trades-table td.negative {
+            color: var(--danger);
+        }
+
         /* ===== TABS ===== */
         .tabs {
             display: flex;
@@ -504,7 +518,8 @@
         <!-- Page Header -->
         <div class="page-header">
             <h1 class="page-title">Portfolio Backtesting</h1>
-            <p class="page-subtitle">Quantitative strategy performance analysis</p>
+            <p class="page-subtitle">Strategy backtests with and without a risk layer</p>
+            <p class="data-note">Prices are synthetic: a seeded Markov regime-switching GBM (data/sample_data.csv). Ticker names are labels only.</p>
         </div>
 
         <!-- Control Panel -->
@@ -651,7 +666,6 @@
                             <thead>
                                 <tr>
                                     <th>Symbol</th>
-                                    <th>Side</th>
                                     <th>Entry</th>
                                     <th>Exit</th>
                                     <th>Qty</th>
@@ -661,7 +675,7 @@
                             </thead>
                             <tbody id="tradesTableBody">
                                 <tr>
-                                    <td colspan="7" style="text-align: center; color: var(--text-tertiary); padding: 2rem;">
+                                    <td colspan="6" style="text-align: center; color: var(--text-tertiary); padding: 2rem;">
                                         No trades to display
                                     </td>
                                 </tr>
@@ -801,7 +815,8 @@
             // Update Performance Metrics
             updateMetric('metric-return', metrics.total_return, '%', true);
             updateMetric('metric-cagr', metrics.cagr, '%', true);
-            updateMetric('metric-equity', metrics.final_equity, '', false, '$');
+            document.getElementById('metric-equity').textContent =
+                '$' + metrics.final_equity.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
             // Update Risk Metrics
             updateMetric('metric-drawdown', metrics.max_drawdown, '%', false);
@@ -810,7 +825,7 @@
 
             // Update Execution Metrics
             updateMetric('metric-winrate', metrics.win_rate, '%', false);
-            updateMetric('metric-trades', metrics.num_trades, '', false);
+            document.getElementById('metric-trades').textContent = String(metrics.num_trades);
 
             const avgWinLoss = `${metrics.avg_win.toFixed(1)} / ${Math.abs(metrics.avg_loss).toFixed(1)}`;
             document.getElementById('metric-avgwin').textContent = avgWinLoss;
@@ -818,9 +833,60 @@
             // Show results
             document.getElementById('results').classList.add('active');
 
-            // Render charts (placeholder data for now)
-            renderEquityChart();
-            renderDrawdownChart();
+            // Charts and trade list come from the stored run
+            loadRunDetails(result.backtest_id);
+        }
+
+        async function loadRunDetails(backtestId) {
+            try {
+                const response = await fetch(`/api/backtest/${backtestId}`);
+                const run = await response.json();
+                if (!response.ok) {
+                    throw new Error(run.error || 'Could not load the equity curve');
+                }
+                renderEquityChart(run.equity_curve);
+                renderDrawdownChart(run.equity_curve);
+                renderTrades(run.trades);
+            } catch (error) {
+                const errorEl = document.getElementById('error');
+                errorEl.textContent = error.message;
+                errorEl.classList.add('active');
+            }
+        }
+
+        function renderTrades(trades) {
+            const body = document.getElementById('tradesTableBody');
+            body.replaceChildren();
+            if (trades.length === 0) {
+                const row = body.insertRow();
+                const cell = row.insertCell();
+                cell.colSpan = 6;
+                cell.style.textAlign = 'center';
+                cell.style.color = 'var(--text-tertiary)';
+                cell.style.padding = '2rem';
+                cell.textContent = 'No closed trades in this run';
+                return;
+            }
+            const money = value => value.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            // The engine is long-only; each row is a closed round trip
+            for (const t of trades) {
+                const cells = [
+                    t.symbol,
+                    `${t.entry_date.slice(0, 10)} @ ${money(t.entry_price)}`,
+                    t.exit_date ? `${t.exit_date.slice(0, 10)} @ ${money(t.exit_price)}` : '-',
+                    t.quantity.toFixed(2),
+                    money(t.pnl),
+                    `${t.pnl_pct.toFixed(2)}%`
+                ];
+                const row = body.insertRow();
+                cells.forEach((text, i) => {
+                    const cell = row.insertCell();
+                    cell.textContent = text;
+                    if (i >= 4) {
+                        cell.classList.add(t.pnl >= 0 ? 'positive' : 'negative');
+                    }
+                });
+            }
         }
 
         function updateMetric(id, value, suffix, colorize, prefix = '') {
@@ -839,22 +905,20 @@
             }
         }
 
-        function renderEquityChart() {
+        function renderEquityChart(curve) {
             const ctx = document.getElementById('equityChart').getContext('2d');
 
             if (equityChartInstance) {
                 equityChartInstance.destroy();
             }
 
-            // Placeholder data - replace with actual equity curve data
-            const data = Array.from({length: 20}, (_, i) => ({
-                x: i,
-                y: 100000 + Math.random() * 5000 * i
-            }));
+            const labels = curve.map(point => point.timestamp.slice(0, 10));
+            const data = curve.map(point => point.equity);
 
             equityChartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
+                    labels: labels,
                     datasets: [{
                         label: 'Equity',
                         data: data,
@@ -862,7 +926,7 @@
                         backgroundColor: 'rgba(59, 130, 246, 0.1)',
                         borderWidth: 2,
                         fill: true,
-                        tension: 0.4,
+                        tension: 0,
                         pointRadius: 0
                     }]
                 },
@@ -876,7 +940,14 @@
                     },
                     scales: {
                         x: {
-                            display: false
+                            ticks: {
+                                color: '#6a6a6a',
+                                maxTicksLimit: 6,
+                                maxRotation: 0
+                            },
+                            grid: {
+                                display: false
+                            }
                         },
                         y: {
                             grid: {
@@ -895,22 +966,25 @@
             });
         }
 
-        function renderDrawdownChart() {
+        function renderDrawdownChart(curve) {
             const ctx = document.getElementById('drawdownChart').getContext('2d');
 
             if (drawdownChartInstance) {
                 drawdownChartInstance.destroy();
             }
 
-            // Placeholder data - replace with actual drawdown data
-            const data = Array.from({length: 20}, (_, i) => ({
-                x: i,
-                y: -Math.random() * 15
-            }));
+            // Drawdown from the running peak, in percent (0 at new highs)
+            const labels = curve.map(point => point.timestamp.slice(0, 10));
+            let peak = -Infinity;
+            const data = curve.map(point => {
+                peak = Math.max(peak, point.equity);
+                return (point.equity / peak - 1) * 100;
+            });
 
             drawdownChartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
+                    labels: labels,
                     datasets: [{
                         label: 'Drawdown',
                         data: data,
@@ -918,7 +992,7 @@
                         backgroundColor: 'rgba(239, 68, 68, 0.1)',
                         borderWidth: 2,
                         fill: true,
-                        tension: 0.4,
+                        tension: 0,
                         pointRadius: 0
                     }]
                 },
@@ -932,7 +1006,14 @@
                     },
                     scales: {
                         x: {
-                            display: false
+                            ticks: {
+                                color: '#6a6a6a',
+                                maxTicksLimit: 6,
+                                maxRotation: 0
+                            },
+                            grid: {
+                                display: false
+                            }
                         },
                         y: {
                             grid: {
@@ -945,7 +1026,7 @@
                                     size: 11
                                 },
                                 callback: function(value) {
-                                    return value + '%';
+                                    return value.toFixed(1) + '%';
                                 }
                             }
                         }

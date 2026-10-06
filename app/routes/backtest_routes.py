@@ -20,9 +20,11 @@ def run_backtest():
         "start_date": "2022-01-01",
         "end_date": "2023-12-31",
         "initial_capital": 100000,
-        "symbols": ["AAPL", "GOOGL"],
-        "market_regime": "mixed"
+        "symbols": ["AAPL", "GOOGL"]
     }
+
+    The prices come from the synthetic sample dataset; the response's `data`
+    field says so.
     """
     try:
         data = request.get_json()
@@ -41,7 +43,7 @@ def run_backtest():
             end_date=data['end_date'],
             initial_capital=data['initial_capital'],
             symbols=data.get('symbols'),
-            market_regime=data.get('market_regime', 'mixed')
+            market_regime=data.get('market_regime')
         )
 
         return jsonify(result), 200
@@ -114,25 +116,33 @@ def compare_backtests():
 @bp.route('/regime-analysis', methods=['POST'])
 def regime_analysis():
     """
-    Run backtests across different market regimes
+    Run one backtest and split its daily returns by the generator's regime labels
 
-    Expected JSON:
+    Expected JSON (dates default to the full dataset):
     {
         "strategy_name": "Moving Average Crossover",
         "risk_config_name": "Conservative",
         "initial_capital": 100000,
-        "symbols": ["AAPL", "GOOGL"]
+        "symbols": ["AAPL", "GOOGL"],
+        "start_date": "2020-01-01",
+        "end_date": "2024-12-31"
     }
     """
     try:
         data = request.get_json()
+
+        for field in ('strategy_name', 'initial_capital'):
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
 
         service = BacktestService()
         result = service.run_regime_analysis(
             strategy_name=data['strategy_name'],
             risk_config_name=data.get('risk_config_name', 'Conservative'),
             initial_capital=data['initial_capital'],
-            symbols=data.get('symbols')
+            symbols=data.get('symbols'),
+            start_date=data.get('start_date'),
+            end_date=data.get('end_date')
         )
 
         return jsonify(result), 200

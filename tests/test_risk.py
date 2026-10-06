@@ -164,3 +164,16 @@ def test_risk_disabled():
     assert is_valid is True
     # Order should not be modified
     assert order.quantity == 800
+
+
+def test_drawdown_halt_blocks_entries_but_not_exits():
+    """After the halt, buys are rejected but a strategy can still close positions."""
+    risk_manager = RiskManager(RiskConfig(name='Test', max_drawdown_pct=0.15, enabled=True))
+    portfolio = Portfolio(initial_capital=100000)
+    portfolio.execute_order(Order(symbol='AAPL', quantity=100, side='buy'), price=100.0, timestamp=datetime.now())
+    risk_manager.peak_equity = 200000  # equity of 100,000 is a 50% drawdown
+    risk_manager.check_drawdown(portfolio)
+    assert risk_manager.trading_halted is True
+
+    assert risk_manager.validate_order(Order(symbol='MSFT', quantity=10, side='buy'), 100.0, portfolio) is False
+    assert risk_manager.validate_order(Order(symbol='AAPL', quantity=100, side='sell'), 100.0, portfolio) is True

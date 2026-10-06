@@ -1,5 +1,5 @@
--- Database initialization script
--- This script is automatically run when the PostgreSQL container starts
+-- PostgreSQL schema, run by the postgres container on first start.
+-- Must match app/models/database.py. Seed rows come from config/*.json via init_db.py.
 
 CREATE TABLE IF NOT EXISTS strategies (
     id SERIAL PRIMARY KEY,
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
     initial_capital FLOAT NOT NULL,
-    symbols TEXT[],
+    symbols JSONB,
     market_regime VARCHAR(50),
     status VARCHAR(50) DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -81,20 +81,3 @@ CREATE INDEX idx_backtest_runs_strategy ON backtest_runs(strategy_id);
 CREATE INDEX idx_backtest_runs_dates ON backtest_runs(start_date, end_date);
 CREATE INDEX idx_equity_curve_run ON equity_curve(backtest_run_id);
 CREATE INDEX idx_trades_run ON trades(backtest_run_id);
-
--- Insert default risk configurations
-INSERT INTO risk_configs (name, max_position_size, max_portfolio_exposure, stop_loss_pct, take_profit_pct, max_drawdown_pct, enabled)
-VALUES
-    ('No Risk Management', 1.0, 1.0, NULL, NULL, NULL, FALSE),
-    ('Conservative', 0.15, 0.7, 0.05, 0.15, 0.15, TRUE),
-    ('Moderate', 0.25, 0.85, 0.07, 0.20, 0.20, TRUE),
-    ('Aggressive', 0.35, 1.0, 0.10, 0.30, 0.25, TRUE)
-ON CONFLICT (name) DO NOTHING;
-
--- Insert default strategies
-INSERT INTO strategies (name, description, parameters)
-VALUES
-    ('Moving Average Crossover', 'Simple moving average crossover strategy', '{"fast_period": 20, "slow_period": 50}'),
-    ('RSI Mean Reversion', 'RSI-based mean reversion strategy', '{"rsi_period": 14, "oversold": 30, "overbought": 70}'),
-    ('Trend Following', 'Breakout-based trend following strategy', '{"lookback_period": 20, "atr_period": 14}')
-ON CONFLICT (name) DO NOTHING;

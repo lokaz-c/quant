@@ -1,0 +1,15 @@
+{
+  "trading_days_per_year": 252,
+  "initial_price_range": [50.0, 200.0],
+  "regimes": [
+    {"name": "bull", "drift": 0.20, "volatility": 0.18},
+    {"name": "bear", "drift": -0.25, "volatility": 0.35},
+    {"name": "sideways", "drift": 0.02, "volatility": 0.12}
+  ],
+  "transition_matrix": [
+    [0.985, 0.005, 0.010],
+    [0.015, 0.965, 0.020],
+    [0.010, 0.010, 0.980]
+  ],
+  "initial_distribution": null
+}

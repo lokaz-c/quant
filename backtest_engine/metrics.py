@@ -20,8 +20,13 @@ class PerformanceMetrics:
         self.equity_df = pd.DataFrame(equity_curve)
         if len(self.equity_df) > 0:
             self.equity_df['timestamp'] = pd.to_datetime(self.equity_df['timestamp'])
+            # Values read back from NUMERIC columns are Decimal, and pct_change
+            # on Decimals raises TypeError (float NaN - Decimal)
+            self.equity_df['equity'] = self.equity_df['equity'].astype(float)
 
         self.trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
+        if 'pnl' in self.trades_df:
+            self.trades_df['pnl'] = self.trades_df['pnl'].astype(float)
 
     def calculate_all(self) -> Dict:
         """Calculate all performance metrics"""
@@ -253,6 +258,17 @@ class PerformanceMetrics:
         return df[['equity', 'monthly_return']]
 
 
+def _naive_utc(ts):
+    """
+    A Timestamp or datetime Series as naive UTC. Stored runs come back with a
+    UTC offset (TIMESTAMPTZ) while the data file's dates are naive, and pandas
+    never matches an aware key to a naive one.
+    """
+    if isinstance(ts, pd.Series):
+        return ts.dt.tz_convert('UTC').dt.tz_localize(None) if ts.dt.tz is not None else ts
+    return ts.tz_convert('UTC').tz_localize(None) if ts.tzinfo is not None else ts
+
+
 def returns_by_regime(
     equity_curve: List[Dict],
     regime_by_date: Mapping,
@@ -278,9 +294,9 @@ def returns_by_regime(
         return {}
 
     df = pd.DataFrame(equity_curve)
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    labels = {pd.Timestamp(k): v for k, v in regime_by_date.items()}
-    df['daily_return'] = df['equity'].pct_change()
+    df['timestamp'] = _naive_utc(pd.to_datetime(df['timestamp'], utc=True))
+    labels = {_naive_utc(pd.Timestamp(k)): v for k, v in regime_by_date.items()}
+    df['daily_return'] = df['equity'].astype(float).pct_change()
     df['regime'] = df['timestamp'].map(labels)
     df = df.dropna(subset=['daily_return', 'regime'])
 

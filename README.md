@@ -22,6 +22,7 @@ flowchart LR
     engine --> metrics["PerformanceMetrics"]
     metrics --> service["BacktestService"]
     service --> db[("PostgreSQL or SQLite")]
+    migrations["Alembic migrations"] --> db
     api["Flask REST API"] --> service
     ui["Dashboard<br/>Chart.js"] --> api
     strategies --> trader["LiveTrader"]
@@ -47,7 +48,7 @@ make run          # docker compose up --build: PostgreSQL 15 + the app
 # open http://localhost:8000  (QUANT_PORT=9000 make run to use another port)
 ```
 
-I checked this from a clean clone. It needs Docker. The sample data is committed, and `init_db.py` seeds the strategies and risk profiles from `config/` on start.
+I checked this from a clean clone. It needs Docker. The sample data is committed. On start, `init_db.py` brings the schema to the latest migration (`alembic upgrade head`) and seeds the strategies and risk profiles from `config/`.
 
 Without Docker (Python 3.10 or 3.11, SQLite):
 
@@ -58,7 +59,7 @@ make dev          # http://localhost:8000
 make test
 ```
 
-`make help` lists the other targets: `data`, `results`, `bench`, `down`, `db-shell`.
+`make help` lists the other targets: `migrate`, `test-pg`, `data`, `results`, `bench`, `down`, `db-shell`.
 
 ## Results
 
@@ -99,21 +100,22 @@ The machine was busy with other work during this run; its load average is record
   - trades: win rate, average win and loss, profit factor, trade count, win and loss streaks
   - returns split by regime
 - **API and dashboard** (`app/`, `templates/index.html`): run a backtest, list and compare runs, and run a regime analysis. The dashboard plots the stored equity curve and drawdown and lists the trades. See [docs/api.md](docs/api.md).
-- **Storage**: SQLAlchemy models (`app/models/database.py`), with SQLite locally and PostgreSQL in Docker (`db/init.sql`).
+- **Storage**: SQLAlchemy models (`app/models/database.py`), with SQLite locally and PostgreSQL in Docker. Alembic migrations (`migrations/`) own the schema: money in `NUMERIC(18, 4)`, timestamps in `TIMESTAMPTZ`, CHECK constraints on the status columns and trade side, and a unique index on `equity_curve(backtest_run_id, timestamp)`. See [docs/database.md](docs/database.md) for the type choices.
 - **Paper trading** (`live_trading/`): an alpaca-py adapter and a `LiveTrader` that runs any of the strategies, optionally with the risk layer. Paper trading is the default; live trading needs both `paper=False` and `QUANT_ALLOW_LIVE_TRADING=yes`. See [docs/live-trading.md](docs/live-trading.md).
 
 ## Tests and CI
 
-There are 86 pytest tests (`pytest --collect-only -q`). They cover:
+There are 117 pytest tests (`pytest --collect-only -q`). They cover:
 
 - the data generator: cross-process determinism under different `PYTHONHASHSEED` values, and that the committed CSV matches the generator
 - the Markov chain: empirical transition frequencies and mean regime durations against the matrix
 - strategy signals, metrics, portfolio accounting and risk rules
-- the Flask API, on temporary SQLite
+- the Flask API, on temporary SQLite and on PostgreSQL
+- the Alembic migrations, on SQLite and PostgreSQL: upgrade to head and downgrade to base, the models matching the head revision, the CHECK constraints and unique index rejecting bad rows, adopting a database created before Alembic, and existing rows surviving the type changes
 - the paper-trading adapter, with fake clients
 - that the results report is reproducible
 
-Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11, and checks that `docs/results.md` is current. mypy runs on the engine as an advisory step and does not fail the build.
+19 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. mypy runs on the engine as an advisory step and does not fail the build.
 
 ## Limitations
 
@@ -131,6 +133,7 @@ Without `requirements-live.txt` installed (`make install-live`), the three tests
 - [docs/results.md](docs/results.md): benchmark backtests (generated)
 - [docs/benchmark.md](docs/benchmark.md): timings (generated)
 - [docs/api.md](docs/api.md): REST API
+- [docs/database.md](docs/database.md): schema, migrations and column types
 - [docs/live-trading.md](docs/live-trading.md): Alpaca paper trading
 
 ## Deploying

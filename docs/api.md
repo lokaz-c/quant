@@ -2,6 +2,8 @@
 
 Flask app in `app/`. Every backtest runs on the synthetic sample data (`data/sample_data.csv`), and the responses say so in a `data` object. Request and response bodies are JSON. Errors come back as `{"error": "<message>"}`, with status 400 for a missing field, 404 for an unknown id and 500 for anything else.
 
+Money amounts are stored as `NUMERIC` and returned as JSON numbers. Timestamps are ISO 8601 in UTC with the offset, e.g. `2023-01-03T00:00:00+00:00`; dates are `YYYY-MM-DD`. See [database.md](database.md).
+
 Base URL: `http://localhost:8000` with `make run` or `make dev`.
 
 | Method | Route | What it does |
@@ -85,4 +87,4 @@ curl -s -X POST http://localhost:8000/api/backtest/ \
   -d '{"strategy_name":"RSI Mean Reversion","risk_config_name":"Moderate","start_date":"2022-01-01","end_date":"2023-12-31","initial_capital":100000,"symbols":["AAPL","MSFT"]}'
 ```
 
-The tests in `tests/test_api.py` exercise these routes against a temporary SQLite database.
+The tests in `tests/test_api.py` exercise these routes against a temporary SQLite database and, with `make test-pg` or in CI, against PostgreSQL.

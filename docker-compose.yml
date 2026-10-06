@@ -7,7 +7,6 @@ services:
       POSTGRES_PASSWORD: quant_pass
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U quant_user -d quant_db"]
       interval: 5s
@@ -27,6 +26,7 @@ services:
         condition: service_healthy
     volumes:
       - ./data:/app/data
+    # init_db.py runs `alembic upgrade head` and seeds, once, before the workers start
     command: >
       sh -c "python init_db.py &&
              gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 300 app.main:app"

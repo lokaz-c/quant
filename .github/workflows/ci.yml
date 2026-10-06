@@ -14,6 +14,27 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11']
 
+    # Same major version as docker-compose.yml. The migration tests and the API
+    # tests run against it; QUANT_REQUIRE_POSTGRES makes them fail, not skip,
+    # if it is unreachable.
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: quant
+          POSTGRES_PASSWORD: quant
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U quant"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      QUANT_TEST_POSTGRES_URL: postgresql://quant:quant@localhost:5432/postgres
+      QUANT_REQUIRE_POSTGRES: '1'
+
     steps:
     - uses: actions/checkout@v7
 

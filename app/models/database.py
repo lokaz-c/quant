@@ -86,6 +86,16 @@ def _in(column: str, values) -> str:
     return f"{column} IN ({', '.join(repr(v) for v in values)})"
 
 
+# Metric columns that must hold NULL or a finite number (migration 0005).
+# PostgreSQL's double precision would otherwise accept NaN and infinities.
+FINITE_METRIC_COLUMNS = ('total_return', 'cagr', 'max_drawdown', 'volatility', 'sharpe_ratio', 'win_rate')
+DOUBLE_MAX = '1.7976931348623157e308'
+
+
+def _finite(column: str) -> str:
+    return f'{column} IS NULL OR {column} BETWEEN -{DOUBLE_MAX} AND {DOUBLE_MAX}'
+
+
 class Strategy(Base):
     __tablename__ = 'strategies'
 
@@ -164,8 +174,14 @@ class BacktestRun(Base):
 
 class BacktestMetrics(Base):
     __tablename__ = 'backtest_metrics'
+    __table_args__ = tuple(
+        CheckConstraint(_finite(column), name=f'ck_backtest_metrics_{column}_finite')
+        for column in FINITE_METRIC_COLUMNS
+    )
 
-    # Percentages and ratios stay double precision; dollar amounts are MONEY
+    # Percentages and ratios stay double precision; dollar amounts are MONEY.
+    # A metric that is undefined for the run is NULL, and undefined_metrics
+    # says why: {"sharpe_ratio": "zero volatility"} (migration 0005).
     id = Column(Integer, primary_key=True)
     backtest_run_id = Column(Integer, ForeignKey('backtest_runs.id', ondelete='CASCADE'))
     total_return = Column(Float)
@@ -179,6 +195,7 @@ class BacktestMetrics(Base):
     num_trades = Column(Integer)
     final_equity = Column(MONEY)
     created_at = Column(UTCDateTime, default=utcnow, server_default=NOW)
+    undefined_metrics = Column(JSONB)
 
     backtest_run = relationship('BacktestRun', back_populates='metrics')
 

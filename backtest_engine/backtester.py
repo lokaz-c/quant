@@ -4,7 +4,7 @@ Orchestrates the entire backtesting process
 """
 import pandas as pd
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from .data_loader import DataLoader
 from .portfolio import Portfolio
 from .strategy_base import StrategyBase
@@ -121,12 +121,13 @@ class Backtester:
         final_prices = dict(zip(final_bar['symbol'], final_bar['close']))
         self.portfolio.close_all_positions(final_prices, self.data['timestamp'].max())
 
-        # Calculate metrics
-        metrics = self._calculate_metrics()
+        # Calculate metrics; undefined ones are None, with the reason
+        metrics, undefined_metrics = self._calculate_metrics()
 
         # Compile results
         self.results = {
             'metrics': metrics,
+            'undefined_metrics': undefined_metrics,
             'equity_curve': self.portfolio.equity_history,
             'trades': self._format_trades(),
             'final_portfolio': {
@@ -142,8 +143,8 @@ class Backtester:
 
         return self.results
 
-    def _calculate_metrics(self) -> Dict:
-        """Calculate performance metrics"""
+    def _calculate_metrics(self) -> Tuple[Dict, Dict[str, str]]:
+        """Performance metrics, and why each undefined (None) one is undefined"""
         trades_data = [
             {
                 'symbol': t.symbol,
@@ -166,7 +167,8 @@ class Backtester:
             initial_capital=self.initial_capital
         )
 
-        return calculator.calculate_all()
+        metrics = calculator.calculate_all()
+        return metrics, dict(calculator.undefined)
 
     def _format_trades(self) -> List[Dict]:
         """Format trades for output"""
@@ -193,18 +195,24 @@ class Backtester:
         print("=" * 60)
 
         metrics = self.results['metrics']
+        undefined = self.results['undefined_metrics']
+
+        def show(key: str, template: str) -> str:
+            value = metrics[key]
+            return f'n/a ({undefined.get(key, "undefined")})' if value is None else template.format(value)
+
         print(f"\nInitial Capital: ${self.initial_capital:,.2f}")
-        print(f"Final Equity: ${metrics['final_equity']:,.2f}")
-        print(f"Total Return: {metrics['total_return']:.2f}%")
-        print(f"CAGR: {metrics['cagr']:.2f}%")
-        print(f"Max Drawdown: {metrics['max_drawdown']:.2f}%")
-        print(f"Volatility: {metrics['volatility']:.2f}%")
-        print(f"Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
+        print(f"Final Equity: {show('final_equity', '${:,.2f}')}")
+        print(f"Total Return: {show('total_return', '{:.2f}%')}")
+        print(f"CAGR: {show('cagr', '{:.2f}%')}")
+        print(f"Max Drawdown: {show('max_drawdown', '{:.2f}%')}")
+        print(f"Volatility: {show('volatility', '{:.2f}%')}")
+        print(f"Sharpe Ratio: {show('sharpe_ratio', '{:.2f}')}")
         print(f"\nNumber of Trades: {metrics['num_trades']}")
-        print(f"Win Rate: {metrics['win_rate']:.2f}%")
-        print(f"Average Win: ${metrics['avg_win']:.2f}")
-        print(f"Average Loss: ${metrics['avg_loss']:.2f}")
-        print(f"Profit Factor: {metrics['profit_factor']:.2f}")
+        print(f"Win Rate: {show('win_rate', '{:.2f}%')}")
+        print(f"Average Win: {show('avg_win', '${:.2f}')}")
+        print(f"Average Loss: {show('avg_loss', '${:.2f}')}")
+        print(f"Profit Factor: {show('profit_factor', '{:.2f}')}")
 
         print("\n" + "=" * 60)
 
@@ -224,14 +232,21 @@ class Backtester:
         current = self.results['metrics']
         baseline = baseline_results['metrics']
 
+        def diff(key):
+            # None when either side is undefined
+            if current[key] is None or baseline[key] is None:
+                return None
+            return current[key] - baseline[key]
+
         comparison = {
-            'total_return_diff': current['total_return'] - baseline['total_return'],
-            'max_drawdown_diff': current['max_drawdown'] - baseline['max_drawdown'],
-            'sharpe_ratio_diff': current['sharpe_ratio'] - baseline['sharpe_ratio'],
-            'win_rate_diff': current['win_rate'] - baseline['win_rate'],
-            'num_trades_diff': current['num_trades'] - baseline['num_trades'],
+            'total_return_diff': diff('total_return'),
+            'max_drawdown_diff': diff('max_drawdown'),
+            'sharpe_ratio_diff': diff('sharpe_ratio'),
+            'win_rate_diff': diff('win_rate'),
+            'num_trades_diff': diff('num_trades'),
+            # None when the baseline had no drawdown to improve on
             'drawdown_improvement_pct': ((baseline['max_drawdown'] - current['max_drawdown']) /
-                                         baseline['max_drawdown'] * 100) if baseline['max_drawdown'] > 0 else 0
+                                         baseline['max_drawdown'] * 100) if baseline['max_drawdown'] > 0 else None
         }
 
         return comparison

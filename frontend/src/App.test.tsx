@@ -67,7 +67,7 @@ describe('App', () => {
     const fetchMock = serve({
       ...READ_ROUTES,
       'GET /api/backtest/list?limit=50': () => [200, []],
-      'POST /api/backtest/': () => [200, { backtest_id: 12, status: 'completed', metrics: managedRun.metrics, baseline: { backtest_id: 11, risk_config: 'No Risk Management', metrics: baselineRun.metrics } }],
+      'POST /api/backtest/': () => [200, { backtest_id: 12, status: 'completed', metrics: managedRun.metrics, undefined_metrics: {}, baseline: { backtest_id: 11, risk_config: 'No Risk Management', metrics: baselineRun.metrics, undefined_metrics: {} } }],
     })
     const user = userEvent.setup()
     render(<App />)

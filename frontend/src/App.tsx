@@ -217,8 +217,12 @@ function Results({ loaded }: { loaded: Loaded }) {
       </div>
 
       <MetricsComparison
-        run={{ label: run.risk_config, metrics: run.metrics }}
-        baseline={baseline?.metrics ? { label: baseline.risk_config, metrics: baseline.metrics } : null}
+        run={{ label: run.risk_config, metrics: run.metrics, undefinedMetrics: run.undefined_metrics }}
+        baseline={
+          baseline?.metrics
+            ? { label: baseline.risk_config, metrics: baseline.metrics, undefinedMetrics: baseline.undefined_metrics }
+            : null
+        }
       />
 
       <CurveChart

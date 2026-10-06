@@ -125,6 +125,8 @@ def compare_backtests():
 
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
+    except InvalidRequest as e:
+        return jsonify({'error': str(e)}), 400
     except Exception:
         return server_error()
 

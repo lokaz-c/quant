@@ -89,6 +89,18 @@ h2 {
   font-size: 0.75rem;
 }
 
+/* An undefined metric: "n/a", with the reason in the title and in the notes under the table */
+abbr.na {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+.notes {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+
 .count {
   color: var(--muted);
   font-weight: 400;

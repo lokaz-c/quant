@@ -28,7 +28,7 @@ These are the same on both sides. Each one is a choice that would make the numbe
 - **Drawdown** is measured from the running peak of the stored curve, starting at its first point. That point equals the initial capital, because the first bar's orders fill at its close and so don't change equity.
 - **Window frame**: an `ORDER BY` window defaults to `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`, which includes rows that tie on the sort key. The queries spell out `ROWS`. Because `equity_curve(backtest_run_id, timestamp)` is unique (migration `0002`), there are no ties, so the two frames are the same here.
 
-One difference: **where volatility is zero, Sharpe is undefined.** The SQL returns NULL, while `PerformanceMetrics.sharpe_ratio()` returns 0.0. The new `PerformanceMetrics.rolling_sharpe()` returns NaN for those windows, to line up with the SQL. A test pins this down with a flat equity curve.
+- **Undefined values.** Where volatility is zero, or there are fewer than two returns, Sharpe is undefined (and volatility too, with fewer than two returns). The SQL returns NULL; `PerformanceMetrics.sharpe_ratio()` and `volatility()` return None, which the API sends as `null` (see [api.md](api.md#undefined-metrics)); `PerformanceMetrics.rolling_sharpe()` returns NaN for those windows. Tests pin this down with a flat curve and a two-point curve. Until the undefined-metrics change, Python returned 0.0 for a flat curve and NaN for a single return, so this was the one place the two sides disagreed.
 
 ## Tolerances
 

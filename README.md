@@ -125,6 +125,7 @@ The machine was busy with other work during this run; its load average is record
   - returns and risk: total return, CAGR, max drawdown, annualised volatility, Sharpe (2% risk-free)
   - trades: win rate, average win and loss, profit factor, trade count, win and loss streaks
   - returns split by regime
+  - a metric with no value for a run (Sharpe with zero volatility, profit factor with no losing trade, win rate with no trades) is `null` with the reason, never `NaN`, `Infinity` or a stand-in 0. The JSON encoder refuses non-finite floats, and CHECK constraints keep them out of the database. See [docs/api.md](docs/api.md#undefined-metrics).
 - **SQL cross-check** (`sql/metrics.sql`): max drawdown, volatility, Sharpe and a 63-day rolling Sharpe, recomputed in PostgreSQL from the stored equity curve with window functions (a running `MAX() OVER`, `LAG`, and `STDDEV_SAMP()` over a `ROWS BETWEEN 62 PRECEDING` frame). CI checks them against the Python metrics: within 1e-9 on the same stored values, and within 1e-5 against the engine's unrounded numbers. `make sql-check` runs the comparison on the 12 benchmark runs. Conventions and tolerances are in [docs/sql-metrics.md](docs/sql-metrics.md).
 - **Data sources** (`data_sources/`):
   - `MarketDataClient`: httpx, keyset pagination, split-adjusted bars by default, an optional `X-API-Key`, 5 s connect and 30 s read timeouts, and retries on 429, 5xx and timeouts with full-jitter backoff that waits out the service's `Retry-After`. A response that breaks the API contract (an unknown `source`, bars out of order, a cursor that doesn't advance) is an error.
@@ -141,7 +142,7 @@ The machine was busy with other work during this run; its load average is record
 
 ## Tests and CI
 
-There are 302 pytest tests (`pytest --collect-only -q`) and 27 frontend tests (vitest). The pytest tests cover:
+There are 351 pytest tests (`pytest --collect-only -q`) and 29 frontend tests (vitest). The pytest tests cover:
 
 - the data generator: cross-process determinism under different `PYTHONHASHSEED` values, and that the committed CSV matches the generator
 - the Markov chain: empirical transition frequencies and mean regime durations against the matrix
@@ -154,8 +155,9 @@ There are 302 pytest tests (`pytest --collect-only -q`) and 27 frontend tests (v
 - the market-data client against an in-process fake of the service and real sockets: pagination, retries and backoff, `Retry-After`, timeouts, error mapping, contract violations; and its parser against responses recorded from the real service
 - the bar cache: hits, fetching only missing ranges, re-based series, the settle window, source changes
 - what each run records about its data, through the API: synthetic, Alpaca and mixed data, baseline pairs, 400s and 502s; and that `make results-real` only says "real" for Alpaca data
+- undefined metrics: `null` with the reason in every response that carries metrics, `NULL` in the database, and strict JSON both ways (a response with `Infinity` is a 500; a request with `NaN` or `1e400` is a 400)
 
-68 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. A separate job type-checks, tests (vitest: formatting, drawdown maths, the API client, the form, the comparison table, the data-source banner, the whole page against a mocked API) and builds the frontend on Node 24. No test needs a running market-data service. mypy runs on the engine as an advisory step and does not fail the build.
+81 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. A separate job type-checks, tests (vitest: formatting, drawdown maths, the API client, the form, the comparison table and run history with undefined metrics, the data-source banner, the whole page against a mocked API) and builds the frontend on Node 24. No test needs a running market-data service. mypy runs on the engine as an advisory step and does not fail the build.
 
 ## Limitations
 

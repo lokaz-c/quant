@@ -7,6 +7,8 @@ Flask app in `app/`. A backtest runs on the synthetic sample file (`data/sample_
 - 502 when the market-data service fails: down, timing out, rate-limiting past the retries, or answering outside its contract. Nothing is stored;
 - 500 for anything else. Its message is generic and the details go to the server log, because exception text can include SQL.
 
+Bodies are strict JSON (RFC 8259) both ways: the server never writes `NaN`, `Infinity` or `-Infinity`, and a request that contains them, or a number too large for a double such as `1e400`, is a 400. A metric that has no value for a run is `null`, with the reason in `undefined_metrics`; see [Undefined metrics](#undefined-metrics).
+
 Money amounts are stored as `NUMERIC` and returned as JSON numbers. Timestamps are ISO 8601 in UTC with the offset, e.g. `2023-01-03T00:00:00+00:00`; dates are `YYYY-MM-DD`. See [database.md](database.md).
 
 Base URL: `http://localhost:8000` with `make run` or `make dev`. The same server serves the React frontend at `/` (from `frontend/dist`; a 503 explains how to build it if it is missing).
@@ -64,10 +66,11 @@ The backtest runs inside the request; with a baseline there are two. Response fi
   - `avg_win`, `avg_loss`: dollars per closed trade
   - `num_trades`: closed trades
   - `final_equity`
-  - `profit_factor`
+  - `profit_factor`: gross profit / gross loss; `null` when no closed trade lost money
   - `max_consecutive_wins`, `max_consecutive_losses`
+- `undefined_metrics`: the reason for each `null` in `metrics`, e.g. `{"profit_factor": "no losing trades"}`; `{}` when every metric is defined
 - `summary`: `equity`, `cash`, `positions` and `total_return` after the forced close on the last bar
-- `baseline`: `{"backtest_id", "risk_config", "metrics"}` for the baseline run, or `null`
+- `baseline`: `{"backtest_id", "risk_config", "metrics", "undefined_metrics"}` for the baseline run, or `null`
 - `data`: where the bars came from:
   - `source`: `"synthetic"` (the local file) or `"market-data"`
   - `reported_source`: what the service reported: `"alpaca"`, `"synthetic"`, or `"mixed"` when the symbols disagree; always `"synthetic"` for the local file
@@ -88,14 +91,15 @@ The stored run:
 - `id`, `strategy`, `risk_config`, `start_date`, `end_date`, `initial_capital`, `symbols`, `market_regime`, `status`, `created_at`
 - `strategy_parameters`: the parameters the run used; `null` for runs stored before they were recorded
 - `baseline_run_id`: the run's unmanaged baseline, or `null`
-- `metrics`: the stored subset; no profit factor or streaks
+- `metrics`: the stored subset; no profit factor or streaks. `null` for a run with no metrics (status `failed`)
+- `undefined_metrics`: the reason for each `null` in `metrics`; `null` when `metrics` is
 - `equity_curve`: one entry per bar, with `timestamp`, `equity`, `cash` and `positions_value`
 - `trades`: closed round trips, each with `symbol`, `entry_date`, `exit_date`, `entry_price`, `exit_price`, `quantity`, `side`, `pnl`, `pnl_pct` and `status`. `side` is the side of the closing order, which is `"sell"` because the engine is long-only.
 - `data`: as stored with the run (migration `0004`); runs from before it read as the local synthetic file
 
 ## GET /api/backtest/list
 
-Newest first: `id`, `strategy`, `risk_config`, `start_date`, `end_date`, `symbols`, `initial_capital`, `baseline_run_id`, `status`, `total_return`, `max_drawdown`, `sharpe_ratio`, `created_at`, `data_source`, `reported_source`, `synthetic`.
+Newest first: `id`, `strategy`, `risk_config`, `start_date`, `end_date`, `symbols`, `initial_capital`, `baseline_run_id`, `status`, `total_return`, `max_drawdown`, `sharpe_ratio`, `undefined_metrics` (the reason for any of those three that is `null`; `null` for a run with no metrics), `created_at`, `data_source`, `reported_source`, `synthetic`.
 
 ## GET /api/data
 
@@ -115,19 +119,52 @@ Each strategy has `id`, `name`, `description`, `parameters` (stored defaults) an
 
 `{"baseline_id": 1, "comparison_id": 2}` returns:
 
-- `baseline` and `comparison`, each with `id`, `strategy`, `risk_config` and `metrics`
+- `baseline` and `comparison`, each with `id`, `strategy`, `risk_config`, `metrics` and `undefined_metrics`
 - `differences`:
-  - `total_return_diff`, `max_drawdown_diff`, `sharpe_ratio_diff`: comparison minus baseline
-  - `drawdown_improvement_pct`: the drawdown reduction as a percentage of the baseline's drawdown
+  - `total_return_diff`, `max_drawdown_diff`, `sharpe_ratio_diff`: comparison minus baseline; `null` if the metric is undefined for either run
+  - `drawdown_improvement_pct`: the drawdown reduction as a percentage of the baseline's drawdown; `null` if the baseline had no drawdown
+- `undefined_differences`: the reason for each `null` in `differences`, e.g. `{"sharpe_ratio_diff": "sharpe_ratio is undefined for the comparison run"}`
+
+A run with no metrics (status `failed`) is a 400.
 
 ## POST /api/backtest/regime-analysis
 
 Same body as a backtest, except that `start_date` and `end_date` are optional and default to the whole file. The service runs and stores one backtest. It then attributes each daily portfolio return to that day's regime from the data's `regime` column. The response:
 
-- `backtest_id`, `metrics` and `data`
-- `by_regime`: for each of `bull`, `bear` and `sideways`, the fields `days`, `compounded_return_pct`, `annualized_mean_return_pct` and `annualized_volatility_pct`
+- `backtest_id`, `metrics`, `undefined_metrics` and `data`
+- `by_regime`: for each of `bull`, `bear` and `sideways`, the fields `days`, `compounded_return_pct`, `annualized_mean_return_pct`, `annualized_volatility_pct` (`null` for a regime with a single day) and `undefined_metrics`
 
 Only the synthetic file has regime labels. When market-data is the server's default, send `"data_source": "synthetic"`; otherwise the request is a 400.
+
+## Undefined metrics
+
+Some metrics have no value for some runs: a ratio whose denominator is zero, or a mean or standard deviation over too few values. Python's `json` module would write these as the bare tokens `NaN` or `Infinity`, which are not JSON (`JSON.parse` rejects them). The API's convention instead:
+
+- the metric is `null`;
+- the object that holds it has a sibling `undefined_metrics` object (`undefined_differences` for the comparison's `differences`) mapping each `null` metric to the reason. Every `null` metric has an entry, and nothing else does.
+
+| Metric | `null` when | Reason |
+| --- | --- | --- |
+| `volatility` | fewer than two daily returns (the sample standard deviation needs two) | `fewer than two daily returns` |
+| `sharpe_ratio` | fewer than two daily returns, or zero volatility | `fewer than two daily returns`, `zero volatility` |
+| `cagr` | the run covers a single day | `the run starts and ends on the same day` |
+| `win_rate` | no closed trades | `no closed trades` |
+| `avg_win` | no closed trades, or none that won | `no closed trades`, `no winning trades` |
+| `avg_loss` | no closed trades, or none that lost | `no closed trades`, `no losing trades` |
+| `profit_factor` | no closed trades, or none that lost (the ratio would be infinite, or 0/0 when every trade broke even) | `no closed trades`, `no losing trades` |
+| any | the computed value is not finite (a CAGR that overflows over a very short run) | `the result is not a finite number` |
+
+`total_return`, `max_drawdown`, `num_trades`, `final_equity` and the streaks are always numbers. A profit factor of 0 (losing trades, no winners) is a number, as is a win rate of 0. Runs stored before migration `0005` may have a `null` with the reason `undefined; the reason was not recorded for this run`, and keep the 0.0 Sharpe the engine used to report for a flat curve. The database stores `NULL` and the reasons (see [database.md](database.md#undefined-metrics)), and `sql/metrics.sql` returns `NULL` in the same cases. The frontend shows `n/a` with the reason.
+
+Trend Following on the synthetic AAPL series, 2023-01-01 to 2023-06-30, makes one trade, a winner. Its response (other fields left out):
+
+```json
+"metrics": {"total_return": 0.7534502051473246, "win_rate": 100.0, "avg_win": 753.4502051473319,
+            "avg_loss": null, "num_trades": 1, "profit_factor": null, ...},
+"undefined_metrics": {"avg_loss": "no losing trades", "profit_factor": "no losing trades"}
+```
+
+The JSON encoder runs with `allow_nan=False` (`app/strict_json.py`), so a non-finite value that slips through is a 500 and a logged error rather than invalid JSON, and the test suite fails.
 
 ## Example
 

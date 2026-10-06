@@ -121,6 +121,7 @@ export const managedRun: Run = {
   status: 'completed',
   created_at: '2026-10-06T00:00:00+00:00',
   metrics: metrics({ total_return: 4.5, max_drawdown: 3.25, sharpe_ratio: 0.41, num_trades: 9, final_equity: 104500 }),
+  undefined_metrics: {},
   equity_curve: curve([100000, 101000, 99000, 104500]),
   trades: [
     { symbol: 'AAPL', entry_date: '2023-01-03T00:00:00+00:00', exit_date: '2023-01-05T00:00:00+00:00', entry_price: 150, exit_price: 160, quantity: 10.5, side: 'sell', pnl: 105, pnl_pct: 6.67, status: 'closed' },
@@ -151,6 +152,7 @@ export const history: RunSummary[] = [managedRun, baselineRun].map((r) => ({
   total_return: r.metrics!.total_return,
   max_drawdown: r.metrics!.max_drawdown,
   sharpe_ratio: r.metrics!.sharpe_ratio,
+  undefined_metrics: {},
   created_at: r.created_at,
   data_source: r.data.source,
   reported_source: r.data.reported_source,

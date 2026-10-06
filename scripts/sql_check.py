@@ -60,7 +60,7 @@ def main() -> int:
             e2e = c['end_to_end']
             rows.append(
                 f"| {strategy} | {profile.name} | {c['engine']['max_drawdown']:.6f} | "
-                f"{c['sql']['max_drawdown']:.6f} | {c['engine']['sharpe_ratio']:.6f} | "
+                f"{c['sql']['max_drawdown']:.6f} | {_sharpe(c['engine']['sharpe_ratio'])} | "
                 f"{_sharpe(c['sql']['sharpe_ratio'])} | {c['undefined_windows']} of {c['rolling_windows']} | "
                 f"{e2e['max_drawdown']:.1e} | {e2e['volatility']:.1e} | {e2e['sharpe_ratio']:.1e} | "
                 f"{e2e['rolling_sharpe_rel']:.1e} |")

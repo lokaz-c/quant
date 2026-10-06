@@ -1,6 +1,17 @@
+import type { ReactNode } from 'react'
 import type { RunSummary } from '../api'
 import { banner } from '../dataLabel'
-import { formatNumber, formatPct } from '../format'
+import { dash, formatNumber, formatPct } from '../format'
+import { NotAvailable, reasonFor } from './NotAvailable'
+
+type SummaryMetric = 'total_return' | 'max_drawdown' | 'sharpe_ratio'
+
+/** A metric cell: the number; n/a with the reason if it is undefined; a dash for a run with no metrics */
+function metric(run: RunSummary, key: SummaryMetric, format: (value: number) => string): ReactNode {
+  const value = run[key]
+  if (value != null) return format(value)
+  return run.undefined_metrics ? <NotAvailable reason={reasonFor(run.undefined_metrics, key)} /> : dash
+}
 
 interface Props {
   runs: RunSummary[]
@@ -50,9 +61,9 @@ export function RunHistory({ runs, selectedId, onSelect }: Props) {
               <td title={`${r.data_source}, reported ${r.reported_source}`}>
                 {banner({ source: r.data_source, reported_source: r.reported_source, synthetic: r.synthetic, description: '' }).short}
               </td>
-              <td className="num">{formatPct(r.total_return)}</td>
-              <td className="num">{formatPct(r.max_drawdown)}</td>
-              <td className="num">{formatNumber(r.sharpe_ratio)}</td>
+              <td className="num">{metric(r, 'total_return', formatPct)}</td>
+              <td className="num">{metric(r, 'max_drawdown', formatPct)}</td>
+              <td className="num">{metric(r, 'sharpe_ratio', formatNumber)}</td>
             </tr>
           ))}
         </tbody>

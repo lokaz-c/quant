@@ -52,19 +52,25 @@ export interface RiskProfile {
   enabled: boolean
 }
 
-// Percentages are in percent (12.3 = 12.3%); money in dollars
+// Percentages are in percent (12.3 = 12.3%); money in dollars. A metric is
+// null when it is undefined for the run (Sharpe with zero volatility, win rate
+// with no trades, ...); the API never sends NaN or Infinity
+// (docs/api.md#undefined-metrics).
 export interface Metrics {
   total_return: number
-  cagr: number
+  cagr: number | null
   max_drawdown: number
-  volatility: number
-  sharpe_ratio: number
-  win_rate: number
-  avg_win: number
-  avg_loss: number
+  volatility: number | null
+  sharpe_ratio: number | null
+  win_rate: number | null
+  avg_win: number | null
+  avg_loss: number | null
   num_trades: number
   final_equity: number
 }
+
+/** Sent next to metrics: the reason for each null metric, e.g. {"sharpe_ratio": "zero volatility"} */
+export type UndefinedMetrics = Record<string, string>
 
 export interface EquityPoint {
   timestamp: string
@@ -99,6 +105,8 @@ export interface Run {
   status: string
   created_at: string
   metrics: Metrics | null
+  // null when metrics is null (a run that failed)
+  undefined_metrics: UndefinedMetrics | null
   equity_curve: EquityPoint[]
   trades: Trade[]
   data: DataLabel
@@ -117,6 +125,8 @@ export interface RunSummary {
   total_return: number | null
   max_drawdown: number | null
   sharpe_ratio: number | null
+  // why any of the three metrics above is null; null for a run with no metrics
+  undefined_metrics: UndefinedMetrics | null
   created_at: string
   data_source: DataSource
   reported_source: ReportedSource
@@ -140,7 +150,8 @@ export interface RunResponse {
   backtest_id: number
   status: string
   metrics: Metrics
-  baseline: { backtest_id: number; risk_config: string; metrics: Metrics } | null
+  undefined_metrics: UndefinedMetrics
+  baseline: { backtest_id: number; risk_config: string; metrics: Metrics; undefined_metrics: UndefinedMetrics } | null
   data: DataLabel
 }
 

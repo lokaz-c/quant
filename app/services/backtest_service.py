@@ -43,6 +43,35 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value is not None else None
 
 
+# For a null metric stored before reasons were recorded (migration 0005)
+REASON_NOT_RECORDED = 'undefined; the reason was not recorded for this run'
+
+
+def undefined_for(values: Dict, reasons: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """
+    The `undefined_metrics` object that goes next to `values`: the reason for
+    each value that is None, and nothing else. A metric is null in the API
+    only when it is undefined for the run (docs/api.md#undefined-metrics).
+    """
+    reasons = reasons or {}
+    return {name: reasons.get(name, REASON_NOT_RECORDED) for name, value in values.items() if value is None}
+
+
+def _stored_metrics(metrics: BacktestMetrics) -> Dict:
+    return {
+        'total_return': metrics.total_return,
+        'cagr': metrics.cagr,
+        'max_drawdown': metrics.max_drawdown,
+        'volatility': metrics.volatility,
+        'sharpe_ratio': metrics.sharpe_ratio,
+        'win_rate': metrics.win_rate,
+        'avg_win': _num(metrics.avg_win),
+        'avg_loss': _num(metrics.avg_loss),
+        'num_trades': metrics.num_trades,
+        'final_equity': _num(metrics.final_equity)
+    }
+
+
 class InvalidRequest(ValueError):
     """
     A client error: an unknown strategy or risk profile, or bad parameters,
@@ -196,7 +225,7 @@ class BacktestService:
             baseline_run_id=baseline['backtest_id'] if baseline else None)
         response['baseline'] = (
             {'backtest_id': baseline['backtest_id'], 'risk_config': baseline_name,
-             'metrics': baseline['metrics']}
+             'metrics': baseline['metrics'], 'undefined_metrics': baseline['undefined_metrics']}
             if baseline else None)
         return response, results
 
@@ -336,9 +365,11 @@ class BacktestService:
                 backtest_run.status = 'completed'
                 backtest_run.completed_at = utcnow()
 
-                # Store metrics (only fields that exist in the database model)
+                # Store metrics (only fields that exist in the database model).
+                # Undefined ones are None -> NULL, with the reasons alongside.
                 metrics_data = results['metrics']
                 metrics = BacktestMetrics(
+                    undefined_metrics=results['undefined_metrics'] or None,
                     backtest_run_id=backtest_id,
                     total_return=metrics_data['total_return'],
                     cagr=metrics_data['cagr'],
@@ -386,6 +417,7 @@ class BacktestService:
                 'backtest_id': backtest_id,
                 'status': 'completed',
                 'metrics': results['metrics'],
+                'undefined_metrics': undefined_for(results['metrics'], results['undefined_metrics']),
                 'summary': results['final_portfolio'],
                 'data': provenance.to_api()
             }, results
@@ -422,6 +454,8 @@ class BacktestService:
                 Trade.backtest_run_id == backtest_id
             ).order_by(Trade.entry_date).all()
 
+            stored = _stored_metrics(metrics) if metrics else None
+
             result = {
                 'id': backtest_run.id,
                 'strategy': backtest_run.strategy.name,
@@ -435,18 +469,9 @@ class BacktestService:
                 'baseline_run_id': backtest_run.baseline_run_id,
                 'status': backtest_run.status,
                 'created_at': _iso(backtest_run.created_at),
-                'metrics': {
-                    'total_return': metrics.total_return,
-                    'cagr': metrics.cagr,
-                    'max_drawdown': metrics.max_drawdown,
-                    'volatility': metrics.volatility,
-                    'sharpe_ratio': metrics.sharpe_ratio,
-                    'win_rate': metrics.win_rate,
-                    'avg_win': _num(metrics.avg_win),
-                    'avg_loss': _num(metrics.avg_loss),
-                    'num_trades': metrics.num_trades,
-                    'final_equity': _num(metrics.final_equity)
-                } if metrics else None,
+                'metrics': stored,
+                'undefined_metrics': (undefined_for(stored, metrics.undefined_metrics)
+                                      if metrics else None),
                 'equity_curve': [
                     {
                         'timestamp': _iso(point.timestamp),
@@ -492,6 +517,11 @@ class BacktestService:
                     BacktestMetrics.backtest_run_id == bt.id
                 ).first()
 
+                summary = {
+                    'total_return': metrics.total_return if metrics else None,
+                    'max_drawdown': metrics.max_drawdown if metrics else None,
+                    'sharpe_ratio': metrics.sharpe_ratio if metrics else None,
+                }
                 result.append({
                     'id': bt.id,
                     'strategy': bt.strategy.name,
@@ -502,9 +532,9 @@ class BacktestService:
                     'initial_capital': _num(bt.initial_capital),
                     'baseline_run_id': bt.baseline_run_id,
                     'status': bt.status,
-                    'total_return': metrics.total_return if metrics else None,
-                    'max_drawdown': metrics.max_drawdown if metrics else None,
-                    'sharpe_ratio': metrics.sharpe_ratio if metrics else None,
+                    **summary,
+                    # null for a run with no metrics (failed); otherwise why any of the three is null
+                    'undefined_metrics': undefined_for(summary, metrics.undefined_metrics) if metrics else None,
                     'created_at': _iso(bt.created_at),
                     'data_source': bt.data_source,
                     'reported_source': bt.reported_source,
@@ -521,31 +551,49 @@ class BacktestService:
         if not baseline or not comparison:
             raise LookupError("One or both backtests not found")
 
+        for run_id, run in ((baseline_id, baseline), (comparison_id, comparison)):
+            if run['metrics'] is None:
+                raise InvalidRequest(f"Backtest {run_id} has no metrics (status: {run['status']})")
         baseline_metrics = baseline['metrics']
         comparison_metrics = comparison['metrics']
+
+        differences: Dict[str, Optional[float]] = {}
+        reasons: Dict[str, str] = {}
+        for key in ('total_return', 'max_drawdown', 'sharpe_ratio'):
+            undefined_in = [label for label, m in (('baseline', baseline_metrics),
+                                                   ('comparison', comparison_metrics)) if m[key] is None]
+            differences[f'{key}_diff'] = (None if undefined_in
+                                          else comparison_metrics[key] - baseline_metrics[key])
+            if undefined_in:
+                reasons[f'{key}_diff'] = f"{key} is undefined for the {' and '.join(undefined_in)} run"
+        base_drawdown = baseline_metrics['max_drawdown']
+        if base_drawdown is None or comparison_metrics['max_drawdown'] is None:
+            differences['drawdown_improvement_pct'] = None
+            reasons['drawdown_improvement_pct'] = 'max_drawdown is undefined for a run'
+        elif base_drawdown > 0:
+            differences['drawdown_improvement_pct'] = (
+                (base_drawdown - comparison_metrics['max_drawdown']) / base_drawdown * 100)
+        else:
+            differences['drawdown_improvement_pct'] = None
+            reasons['drawdown_improvement_pct'] = 'the baseline run had no drawdown'
 
         return {
             'baseline': {
                 'id': baseline_id,
                 'strategy': baseline['strategy'],
                 'risk_config': baseline['risk_config'],
-                'metrics': baseline_metrics
+                'metrics': baseline_metrics,
+                'undefined_metrics': baseline['undefined_metrics']
             },
             'comparison': {
                 'id': comparison_id,
                 'strategy': comparison['strategy'],
                 'risk_config': comparison['risk_config'],
-                'metrics': comparison_metrics
+                'metrics': comparison_metrics,
+                'undefined_metrics': comparison['undefined_metrics']
             },
-            'differences': {
-                'total_return_diff': comparison_metrics['total_return'] - baseline_metrics['total_return'],
-                'max_drawdown_diff': comparison_metrics['max_drawdown'] - baseline_metrics['max_drawdown'],
-                'sharpe_ratio_diff': comparison_metrics['sharpe_ratio'] - baseline_metrics['sharpe_ratio'],
-                'drawdown_improvement_pct': (
-                    (baseline_metrics['max_drawdown'] - comparison_metrics['max_drawdown']) /
-                    baseline_metrics['max_drawdown'] * 100
-                ) if baseline_metrics['max_drawdown'] > 0 else 0
-            }
+            'differences': differences,
+            'undefined_differences': reasons
         }
 
     def run_regime_analysis(
@@ -605,6 +653,7 @@ class BacktestService:
             'start_date': start_date,
             'end_date': end_date,
             'metrics': run['metrics'],
+            'undefined_metrics': run['undefined_metrics'],
             'by_regime': returns_by_regime(equity_curve, regime_by_date, regime_order),
             'data': run['data']
         }

@@ -9,6 +9,7 @@ from flask import Flask, abort, send_from_directory
 from flask_cors import CORS
 
 from app.routes import backtest_routes, data_routes, risk_routes, strategy_routes
+from app.strict_json import StrictJSONProvider
 from data_sources.sources import DataConfig
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -25,7 +26,8 @@ def create_app(frontend_dist=None):
 
     # Configuration
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-    app.json.sort_keys = False  # keep response field order (JSON_SORT_KEYS was removed in Flask 2.3)
+    # Valid JSON only: NaN and infinities are refused both ways (app/strict_json.py)
+    app.json = StrictJSONProvider(app)
 
     # Fail at startup, not on the first request, if QUANT_DATA_SOURCE,
     # MARKET_DATA_URL or MARKET_DATA_ADJUSTMENT don't make sense together

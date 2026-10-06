@@ -23,6 +23,7 @@ describe('RunForm', () => {
       symbols: ['AAPL', 'AMZN', 'GOOGL', 'JPM', 'MSFT'],
       parameters: { fast_period: 20, slow_period: 50 },
       compare_to_baseline: true,
+      data_source: 'synthetic',
     })
   })
 

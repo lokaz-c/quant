@@ -6,6 +6,7 @@ import { RunForm } from './components/RunForm'
 import { RunHistory } from './components/RunHistory'
 import { TradesTable } from './components/TradesTable'
 import { mergeCurves } from './curves'
+import { banner } from './dataLabel'
 import { formatMoney, formatPct } from './format'
 
 const REPO = 'https://github.com/lokaz-c/quant'
@@ -67,6 +68,10 @@ export default function App() {
     }
   }, [selection])
 
+  // The banner describes the run on screen; before one is open, the source a new run would use
+  const label = loaded?.run.data ?? data
+  const notice = label ? banner(label) : null
+
   const submit = useCallback(async (request: RunRequest) => {
     setRunning(true)
     setRunError(null)
@@ -99,12 +104,15 @@ export default function App() {
         </div>
       </header>
 
-      <div className="notice" role="note">
+      <div className={`notice notice-${notice?.kind ?? 'loading'}`} role="note">
         <div className="container">
-          <strong>Synthetic data.</strong>{' '}
-          {data?.description ??
-            'Prices come from a seeded Markov regime-switching GBM, not from any market. Ticker names are labels only.'}{' '}
-          Results describe one simulated path, not real markets.
+          {notice ? (
+            <>
+              <strong>{notice.title}</strong> {notice.text}
+            </>
+          ) : (
+            'Checking the data source…'
+          )}
         </div>
       </div>
 
@@ -158,8 +166,8 @@ export default function App() {
 
       <footer className="footer">
         <div className="container">
-          Synthetic prices only. Backtests fill at the signal bar's close with no costs or slippage; see the{' '}
-          <a href={`${REPO}#limitations`}>limitations</a>.
+          {notice ? `${notice.footer} ` : ''}Backtests fill at the signal bar's close with no costs or slippage; see
+          the <a href={`${REPO}#limitations`}>limitations</a>.
         </div>
       </footer>
     </>
@@ -204,7 +212,7 @@ function Results({ loaded }: { loaded: Loaded }) {
         <p className="hint">
           {parameters && `${parameters} · `}
           {run.symbols ? run.symbols.join(', ') : 'all symbols'} · {run.start_date} to {run.end_date} ·{' '}
-          {formatMoney(run.initial_capital)}
+          {formatMoney(run.initial_capital)} · data: {banner(run.data).short}
         </p>
       </div>
 

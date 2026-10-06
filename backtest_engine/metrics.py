@@ -7,6 +7,13 @@ import pandas as pd
 from typing import Dict, List, Mapping, Optional, Sequence
 from datetime import datetime
 
+# Conventions shared with sql/metrics.sql (the SQL cross-check binds these):
+# daily returns, annualised with 252 trading days, Sharpe net of a 2% annual
+# risk-free rate, sample standard deviation (ddof=1, pandas' default).
+TRADING_DAYS_PER_YEAR = 252
+RISK_FREE_RATE = 0.02
+ROLLING_SHARPE_WINDOW = 63  # trading days, about one quarter
+
 
 class PerformanceMetrics:
     """Calculate and store performance metrics"""
@@ -71,16 +78,18 @@ class PerformanceMetrics:
 
         return cagr
 
+    def drawdown_series(self) -> pd.Series:
+        """Drawdown from the running peak at each point, in percent"""
+        equity = self.equity_df.set_index('timestamp')['equity']
+        peak = equity.cummax()
+        return (peak - equity) / peak * 100
+
     def max_drawdown(self) -> float:
         """Maximum drawdown percentage"""
         if len(self.equity_df) == 0:
             return 0.0
 
-        equity = self.equity_df['equity'].values
-        peak = np.maximum.accumulate(equity)
-        drawdown = (peak - equity) / peak
-
-        return float(np.max(drawdown) * 100)
+        return float(self.drawdown_series().max())
 
     def volatility(self) -> float:
         """Annualized volatility"""
@@ -95,11 +104,11 @@ class PerformanceMetrics:
 
         # Annualize (assuming 252 trading days)
         daily_vol = returns.std()
-        annual_vol = daily_vol * np.sqrt(252)
+        annual_vol = daily_vol * np.sqrt(TRADING_DAYS_PER_YEAR)
 
         return float(annual_vol * 100)
 
-    def sharpe_ratio(self, risk_free_rate: float = 0.02) -> float:
+    def sharpe_ratio(self, risk_free_rate: float = RISK_FREE_RATE) -> float:
         """Sharpe ratio (annualized)"""
         if len(self.equity_df) < 2:
             return 0.0
@@ -111,8 +120,8 @@ class PerformanceMetrics:
             return 0.0
 
         # Annualize
-        annual_return = returns.mean() * 252
-        annual_vol = returns.std() * np.sqrt(252)
+        annual_return = returns.mean() * TRADING_DAYS_PER_YEAR
+        annual_vol = returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
 
         if annual_vol == 0:
             return 0.0
@@ -120,6 +129,24 @@ class PerformanceMetrics:
         sharpe = (annual_return - risk_free_rate) / annual_vol
 
         return float(sharpe)
+
+    def rolling_sharpe(self, window: int = ROLLING_SHARPE_WINDOW,
+                       risk_free_rate: float = RISK_FREE_RATE) -> pd.Series:
+        """
+        Sharpe ratio over each trailing `window` daily returns, indexed by the
+        timestamp of the window's last return. Same conventions as
+        sharpe_ratio(). The first equity point has no return, so the first
+        value is at point `window` (0-based). Windows with zero volatility,
+        where Sharpe is undefined, are NaN (sharpe_ratio() reports 0.0 there).
+        """
+        if len(self.equity_df) < 2:
+            return pd.Series(dtype=float)
+
+        returns = self.equity_df.set_index('timestamp')['equity'].pct_change().dropna()
+        rolling = returns.rolling(window)
+        mean, std = rolling.mean(), rolling.std()  # std: ddof=1
+        sharpe = (mean * TRADING_DAYS_PER_YEAR - risk_free_rate) / (std * np.sqrt(TRADING_DAYS_PER_YEAR))
+        return sharpe.where(std > 0).iloc[window - 1:]
 
     def win_rate(self) -> float:
         """Percentage of winning trades"""

@@ -174,3 +174,36 @@ def test_returns_by_regime_matches_utc_timestamps_to_naive_dates():
     result = returns_by_regime(curve, labels)
     assert result['bull']['compounded_return_pct'] == pytest.approx(10.0)
     assert result['bear']['compounded_return_pct'] == pytest.approx(-10.0)
+
+
+def test_rolling_sharpe_uses_sample_sd_and_the_same_annualisation():
+    import math
+    import statistics
+    equity = [100.0, 101.0, 100.5, 102.0, 101.0, 103.5]
+    curve = [{'timestamp': d, 'equity': e}
+             for d, e in zip(pd.bdate_range('2023-01-02', periods=len(equity)), equity)]
+    returns = [b / a - 1 for a, b in zip(equity, equity[1:])]
+
+    rolling = PerformanceMetrics(curve, [], 100.0).rolling_sharpe(window=3)
+
+    # The first point has no return, so the first full 3-return window ends at point 3
+    assert list(rolling.index) == [c['timestamp'] for c in curve[3:]]
+    for i, value in enumerate(rolling):
+        window = returns[i:i + 3]
+        expected = (statistics.mean(window) * 252 - 0.02) / (statistics.stdev(window) * math.sqrt(252))
+        assert value == pytest.approx(expected, abs=1e-12)
+
+
+def test_rolling_sharpe_is_undefined_in_flat_windows():
+    curve = [{'timestamp': d, 'equity': 100.0} for d in pd.bdate_range('2023-01-02', periods=6)]
+    metrics = PerformanceMetrics(curve, [], 100.0)
+    assert metrics.rolling_sharpe(window=3).isna().all()
+    assert metrics.sharpe_ratio() == 0.0  # the full-period method reports 0.0 instead
+
+
+def test_drawdown_series_is_measured_from_the_running_peak():
+    curve = [{'timestamp': d, 'equity': e}
+             for d, e in zip(pd.bdate_range('2023-01-02', periods=5), [100, 110, 88, 120, 114])]
+    metrics = PerformanceMetrics(curve, [], 100)
+    assert metrics.drawdown_series().round(9).tolist() == [0.0, 0.0, 20.0, 0.0, 5.0]
+    assert metrics.max_drawdown() == pytest.approx(20.0)

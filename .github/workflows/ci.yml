@@ -73,3 +73,31 @@ jobs:
       run: |
         pip install mypy
         mypy backtest_engine/ --config-file mypy.ini
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Set up Node 24
+      uses: actions/setup-node@v7
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Type check
+      run: npm run typecheck
+
+    - name: Tests (vitest)
+      run: npm test
+
+    - name: Build
+      run: npm run build

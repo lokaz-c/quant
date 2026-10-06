@@ -1,14 +1,18 @@
 """
-Flask API tests against a temporary SQLite database seeded from config/*.json
+Flask API tests, run twice: on a temporary SQLite database and on a fresh
+PostgreSQL database (skipped without one; see conftest.py). Both are created
+with the Alembic migrations and seeded from config/*.json.
 """
 import json
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
 
 from app.main import create_app
 from app.services.backtest_service import BacktestService
 from init_db import init_database
+from tests.postgres import app_bound_to, fresh_postgres_database
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -22,12 +26,20 @@ BACKTEST = {
 }
 
 
-@pytest.fixture(scope='module')
-def client():
-    init_database()
+@pytest.fixture(scope='module', params=['sqlite', pytest.param('postgres', marks=pytest.mark.postgres)])
+def client(request):
     app = create_app()
     app.testing = True
-    return app.test_client()
+    if request.param == 'sqlite':
+        init_database()  # the app's DATABASE_URL: a temporary SQLite file
+        yield app.test_client()
+        return
+    with fresh_postgres_database() as url:
+        engine = create_engine(url)
+        init_database(engine)
+        with app_bound_to(engine):
+            yield app.test_client()
+        engine.dispose()
 
 
 @pytest.fixture(scope='module')
@@ -75,6 +87,22 @@ def test_stored_run_has_equity_curve_and_trades(client, completed_run):
     assert run['equity_curve'][-1]['equity'] == pytest.approx(completed_run['metrics']['final_equity'])
     assert all(t['status'] == 'closed' for t in run['trades'])
     assert run['data']['synthetic'] is True
+
+
+def test_stored_values_are_json_numbers_and_utc_timestamps(client, completed_run):
+    # NUMERIC columns come back as Decimal and TIMESTAMPTZ as aware datetimes;
+    # the API returns numbers and ISO 8601 with the UTC offset on both backends
+    run = client.get(f"/api/backtest/{completed_run['backtest_id']}").get_json()
+    assert isinstance(run['initial_capital'], float)
+    assert isinstance(run['metrics']['final_equity'], float)
+    point = run['equity_curve'][0]
+    assert isinstance(point['equity'], float) and isinstance(point['cash'], float)
+    assert point['timestamp'] == '2023-01-02T00:00:00+00:00'
+    assert run['created_at'].endswith('+00:00')
+    trade = run['trades'][0]
+    assert all(isinstance(trade[k], float) for k in ('entry_price', 'exit_price', 'quantity', 'pnl'))
+    assert trade['exit_date'].endswith('T00:00:00+00:00')
+    assert trade['side'] == 'sell' and trade['status'] == 'closed'
 
 
 def test_missing_field_is_a_400(client):

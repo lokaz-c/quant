@@ -1,3 +1,12 @@
+# Stage 1: build the React frontend (frontend/ -> frontend/dist)
+FROM node:24-alpine AS frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: the Flask app, which serves the API and the built frontend
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -12,8 +21,9 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code (.dockerignore keeps node_modules, venvs and caches out)
 COPY . .
+COPY --from=frontend /frontend/dist ./frontend/dist
 
 # Create directories for data
 RUN mkdir -p /app/data

@@ -5,6 +5,7 @@ Handles business logic for running and managing backtests
 import logging
 from bisect import bisect_left
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Iterator, List, Optional, Dict, Tuple, Union
@@ -86,8 +87,25 @@ class DataSourceUnavailable(RuntimeError):
     """
 
 
+class RunNotFound(LookupError):
+    """A backtest id that isn't stored. The API answers 404."""
+
+
 # NUMERIC(18, 4) holds values below 1e14; this leaves room for gains
 MAX_INITIAL_CAPITAL = 1e12
+# Column widths: trades.symbol and backtest_runs.market_regime
+MAX_SYMBOL_LENGTH = 20
+MAX_REGIME_LABEL_LENGTH = 50
+
+
+@dataclass(frozen=True)
+class RequestLimits:
+    """
+    Caps on what one request may ask for. The API applies the configured ones
+    (app/config.py); scripts that call the service directly have none.
+    """
+    max_symbols: int
+    max_range_days: int
 
 
 def _parse_date(value, field: str) -> date:
@@ -109,13 +127,21 @@ class BacktestService:
     # Extra MarketDataClient arguments; the tests pass a fake transport here
     client_kwargs: Dict = {}
 
-    def __init__(self, config: Optional[DataConfig] = None):
+    def __init__(self, config: Optional[DataConfig] = None, limits: Optional[RequestLimits] = None,
+                 deadline: Optional[float] = None):
+        """
+        limits: request caps (None: no caps). deadline: a time.monotonic()
+        value after which a running backtest stops with BacktestTimeout; it
+        covers the whole request, both runs of a baseline pair included.
+        """
         self.strategy_map = {
             'Moving Average Crossover': MovingAverageCrossover,
             'RSI Mean Reversion': RSIMeanReversion,
             'Trend Following': TrendFollowing
         }
         self.config = config or DataConfig.from_env()
+        self.limits = limits
+        self.deadline = deadline
 
     @contextmanager
     def _source(self, requested: Optional[str]) -> Iterator[Union[SyntheticSource, MarketDataSource]]:
@@ -198,6 +224,9 @@ class BacktestService:
         stored, and both runs of a baseline pair use them, so the pair always
         shares its data and its provenance.
         """
+        if market_regime is not None and (not isinstance(market_regime, str)
+                                          or len(market_regime) > MAX_REGIME_LABEL_LENGTH):
+            raise InvalidRequest(f'market_regime must be text of at most {MAX_REGIME_LABEL_LENGTH} characters')
         with self._source(data_source) as source:
             self._validate_inputs(source, start_date, end_date, initial_capital, symbols)
             with get_db() as db:   # unknown strategy, profile or bad parameters: fail before fetching
@@ -233,6 +262,10 @@ class BacktestService:
         start, end = _parse_date(start_date, 'start_date'), _parse_date(end_date, 'end_date')
         if start > end:
             raise InvalidRequest('start_date must not be after end_date')
+        days = (end - start).days + 1
+        if self.limits and days > self.limits.max_range_days:
+            raise InvalidRequest(f'The period is {days:,} days; this server allows at most '
+                                 f'{self.limits.max_range_days:,} per run')
         if isinstance(source, SyntheticSource):
             known_symbols, dates = source.index()
             first_bar = bisect_left(dates, start)
@@ -248,6 +281,15 @@ class BacktestService:
         if symbols is not None:
             if not isinstance(symbols, list) or not symbols or not all(isinstance(s, str) for s in symbols):
                 raise InvalidRequest('symbols must be a non-empty list of strings')
+            if any(not 0 < len(s) <= MAX_SYMBOL_LENGTH for s in symbols):
+                raise InvalidRequest(f'Each symbol must be 1 to {MAX_SYMBOL_LENGTH} characters')
+        if self.limits:
+            count = len(symbols) if symbols is not None else (
+                len(known_symbols) if isinstance(source, SyntheticSource) else 0)
+            if count > self.limits.max_symbols:
+                omitted = '' if symbols is not None else '; without symbols the run would use every one in the file'
+                raise InvalidRequest(f'This server allows at most {self.limits.max_symbols} symbols per run, '
+                                     f'got {count}{omitted}')
         if isinstance(source, SyntheticSource):
             unknown = sorted(set(symbols or ()) - set(known_symbols))
             if unknown:
@@ -353,7 +395,8 @@ class BacktestService:
                 risk_config=risk_config,
                 start_date=start_date,
                 end_date=end_date,
-                symbols=symbols
+                symbols=symbols,
+                deadline=self.deadline
             )
 
             results = backtester.run()
@@ -549,7 +592,7 @@ class BacktestService:
         comparison = self.get_backtest_results(comparison_id)
 
         if not baseline or not comparison:
-            raise LookupError("One or both backtests not found")
+            raise RunNotFound("One or both backtests not found")
 
         for run_id, run in ((baseline_id, baseline), (comparison_id, comparison)):
             if run['metrics'] is None:

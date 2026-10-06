@@ -1,10 +1,23 @@
 # REST API
 
-Flask app in `app/`. A backtest runs on the synthetic sample file (`data/sample_data.csv`) or on bars from the market-data service, and every run's `data` object says which, and what the service said the bars are (see [market-data.md](market-data.md)). Request and response bodies are JSON. Errors come back as `{"error": "<message>"}`:
+Flask app in `app/`. A backtest runs on the synthetic sample file (`data/sample_data.csv`) or on bars from the market-data service, and every run's `data` object says which, and what the service said the bars are (see [market-data.md](market-data.md)). Request and response bodies are JSON. Errors are RFC 9457 problem details (`application/problem+json`):
 
-- 400 for invalid input, with the reason (a missing field, an unknown strategy, profile, symbol or data source, a parameter outside its limits, a date range with no bars, a non-positive capital);
-- 404 for an unknown id;
+```json
+{"title": "Bad Request", "status": 400, "detail": "Unknown symbol(s): NOPE",
+ "instance": "/api/backtest/", "error": "Unknown symbol(s): NOPE"}
+```
+
+`type` is omitted, which RFC 9457 reads as `about:blank`: the status code is the problem type. `error` repeats `detail` for clients written against the earlier `{"error": "<message>"}` bodies. The statuses:
+
+- 400 for invalid input, with the reason: a missing field, an unknown strategy, profile, symbol or data source, a parameter outside its limits, a date range with no bars, a non-positive capital, or a request over the server's caps (see [Limits](#limits-rate-limits-and-api-keys));
+- 401 for an `X-API-Key` that is present but not valid;
+- 404 for an unknown id or route; 405 for a method the route doesn't take;
+- 409 for a strategy name that already exists;
+- 413 for a body over 64 KiB;
+- 429 when the client address is over a rate limit, with `Retry-After` in seconds;
 - 502 when the market-data service fails: down, timing out, rate-limiting past the retries, or answering outside its contract. Nothing is stored;
+- 503 with `Retry-After` when the server is already running as many backtests as it allows at once;
+- 504 when a backtest runs past the time limit. The run is stopped between two bars and stored with status `failed`;
 - 500 for anything else. Its message is generic and the details go to the server log, because exception text can include SQL.
 
 Bodies are strict JSON (RFC 8259) both ways: the server never writes `NaN`, `Infinity` or `-Infinity`, and a request that contains them, or a number too large for a double such as `1e400`, is a 400. A metric that has no value for a run is `null`, with the reason in `undefined_metrics`; see [Undefined metrics](#undefined-metrics).
@@ -26,9 +39,38 @@ Base URL: `http://localhost:8000` with `make run` or `make dev`. The same server
 | POST | `/api/strategies/` | Store a strategy record (name, description, parameters) |
 | GET | `/api/risk-configs/` | Risk profiles |
 | GET | `/api/risk-configs/<id>` | One risk profile |
-| GET | `/health` | `{"status": "healthy"}` |
+| GET | `/health` | `{"status": "healthy"}`; touches no database (Render's health check) |
 
-Strategies and risk profiles are seeded from `config/strategies.json` and `config/risk_configs.json` by `init_db.py`. `POST /api/strategies/` only stores a record. A strategy can be run only if `BacktestService.strategy_map` has a class for its name.
+Strategies and risk profiles are seeded from `config/strategies.json` and `config/risk_configs.json` by `init_db.py`. `POST /api/strategies/` only stores a record: `name` (1 to 255 characters, unique; a duplicate is a 409), an optional `description` (up to 2,000 characters) and `parameters` (an object with up to 50 entries). A strategy can be run only if `BacktestService.strategy_map` has a class for its name.
+
+## Limits, rate limits and API keys
+
+The API is meant to sit behind a public demo, so it caps what one request and one client can ask for. Every value is an environment variable read at startup (`app/config.py`, `.env.example`); the defaults are below.
+
+| What | Default | Setting |
+| --- | --- | --- |
+| Symbols per run (omitting `symbols` selects every symbol in the file, which counts too) | 10 | `QUANT_MAX_SYMBOLS` |
+| Period per run, calendar days from `start_date` to `end_date` inclusive | 1,827 (the synthetic file's 2020-2024) | `QUANT_MAX_RANGE_DAYS` |
+| Time limit per request, both runs of a baseline pair together | 90 s | `QUANT_BACKTEST_TIMEOUT_SECONDS` |
+| Backtests running at once in the process | 1 | `QUANT_MAX_CONCURRENT_RUNS` |
+| Requests that run a backtest or store a record (`POST /api/backtest/`, `/api/backtest/regime-analysis`, `/api/strategies/`), one shared limit per client address | 5 per minute and 30 per hour | `QUANT_RATE_LIMIT_RUNS` |
+| Every other `/api` request, per client address | 120 per minute | `QUANT_RATE_LIMIT_READS` |
+| Request body | 64 KiB | fixed |
+| `GET /api/backtest/list?limit=` | 1 to 500 | fixed |
+
+Strategy parameters must be within each strategy's `parameter_limits`, and `initial_capital` must be above 0 and at most 1e12. Each symbol is 1 to 20 characters and `market_regime` at most 50, the widths of their columns. `GET /api/data` returns the caps as `limits`, so a client can stay inside them: `{"max_symbols": 10, "max_range_days": 1827, "timeout_seconds": 90.0}`. `/health` and the frontend's files are not rate limited.
+
+**Rate limiting** uses Flask-Limiter with in-memory storage and the moving-window strategy. A client over a limit gets a 429 with `Retry-After` (seconds until the oldest counted request leaves the window) and a problem body. In-memory counters belong to one process. The Docker image runs one gunicorn process with four threads (`gunicorn.conf.py`), and Render's free tier runs a single instance, so the limits are exact. With more processes or instances, each would keep its own counters and the effective limit would multiply; `QUANT_RATE_LIMIT_STORAGE_URI=redis://...` shares them without code changes. The run-slot count is per process for the same reason. `QUANT_RATE_LIMITS=off` turns rate limiting off.
+
+**Client address.** By default it is the TCP peer. Behind a proxy, every request comes from the proxy, so set `QUANT_CLIENT_IP_HEADER` to a header the proxy overwrites on every request. On Render this is Cloudflare's `CF-Connecting-IP`. `X-Forwarded-For` is not a good choice there: Render appends to the client's value instead of replacing it. A header the client controls would let it pick its own rate-limit bucket.
+
+**API key.** `QUANT_API_KEY_SHA256` holds the SHA-256 hex digests of one or more keys, separated by commas. The server stores no keys, and compares digests in constant time. A request with a valid `X-API-Key` header is not rate limited; this is for server-side clients such as TradeDesk. It still gets the caps, the time limit and the run slots. A key that is present but wrong is a 401, so a misconfigured client finds out instead of being limited silently; the market-data service uses the same rule. Without the header, a request is anonymous.
+
+**CORS.** `QUANT_CORS_ORIGINS` lists the exact origins (`https://host[:port]`) that may call `/api` from a browser, for `GET` and `POST` with a `Content-Type` header. The default is none, so there are no CORS headers: the bundled frontend is same-origin, and server-side clients aren't subject to CORS. `*` is refused at startup.
+
+**Time limit.** The engine checks the deadline before each bar and stops with a 504 once it has passed. Python can't kill a running thread from outside, so the check is cooperative. A bar takes milliseconds, so the overshoot is small. The deadline starts when the request arrives, so a slow market-data fetch counts too. A stopped run is stored with status `failed`. In a container limited to Render's free size, the frontend's default request took about a minute; the README's [Deploying](../README.md#deploying) section has the measurement.
+
+**No async endpoint.** A run happens inside the request; there is no 202-and-poll endpoint. On a single 0.1 CPU instance, a background thread would compete with request threads for the one CPU and the GIL. Queued runs would also be lost whenever the instance restarts or spins down, and a durable queue needs a second service. The time limit, the run slot and the caps bound a request instead.
 
 ## POST /api/backtest/
 
@@ -49,15 +91,15 @@ Strategies and risk profiles are seeded from `config/strategies.json` and `confi
 `strategy_name`, `start_date`, `end_date` and `initial_capital` are required. The other fields:
 
 - `risk_config_name` defaults to `"No Risk Management"`.
-- `symbols` defaults to every symbol in the file.
+- `symbols` defaults to every symbol in the file; that counts against the symbol cap (25 in the file, 10 allowed by default), so send them.
 - `parameters` overrides some or all of the strategy's stored parameters. Each must be a number within the strategy's limits (`parameter_limits` in `GET /api/strategies/`), with whole numbers for periods. MA crossover also needs fast < slow, and RSI needs oversold < overbought. The run stores the full set it used.
 - `compare_to_baseline: true` first runs the same inputs with the risk profile whose risk layer is off, stores that run, and links the requested run to it. It is ignored when the chosen profile already has the risk layer off.
 - `market_regime` is a free-text label stored with the run; it does not change the data.
 - `data_source` is `"synthetic"` or `"market-data"`; the server's default (`QUANT_DATA_SOURCE`) if omitted. `"market-data"` needs `MARKET_DATA_URL` on the server, and explicit `symbols`, each listed by the service's `/v1/symbols` for this server. The bars are fetched once, before anything is stored, and a baseline pair shares them.
 
-`initial_capital` must be above 0 and at most 1,000,000,000,000; equity is stored as `NUMERIC(18, 4)`. Invalid input is rejected with a 400 before any run is stored.
+`initial_capital` must be above 0 and at most 1,000,000,000,000; equity is stored as `NUMERIC(18, 4)`. Invalid input, or a request over the [caps](#limits-rate-limits-and-api-keys), is rejected with a 400 before any run is stored.
 
-The backtest runs inside the request; with a baseline there are two. Response fields:
+The backtest runs inside the request; with a baseline there are two, and the time limit covers both. Response fields:
 
 - `backtest_id` (int) and `status` (`"completed"`)
 - `metrics`:
@@ -99,16 +141,17 @@ The stored run:
 
 ## GET /api/backtest/list
 
-Newest first: `id`, `strategy`, `risk_config`, `start_date`, `end_date`, `symbols`, `initial_capital`, `baseline_run_id`, `status`, `total_return`, `max_drawdown`, `sharpe_ratio`, `undefined_metrics` (the reason for any of those three that is `null`; `null` for a run with no metrics), `created_at`, `data_source`, `reported_source`, `synthetic`.
+Newest first, at most `limit` rows (1 to 500, default 50): `id`, `strategy`, `risk_config`, `start_date`, `end_date`, `symbols`, `initial_capital`, `baseline_run_id`, `status`, `total_return`, `max_drawdown`, `sharpe_ratio`, `undefined_metrics` (the reason for any of those three that is `null`; `null` for a run with no metrics), `created_at`, `data_source`, `reported_source`, `synthetic`.
 
 ## GET /api/data
 
-The default source, or `?source=synthetic|market-data`. The same label fields as a run's `data`, plus `symbols`, `start_date`, `end_date`, `bars` (business days in the file; `null` for market-data), `available_sources` and `default_source`. For market-data, the label comes from the sources of every symbol the service lists for this server.
+The default source, or `?source=synthetic|market-data`. The same label fields as a run's `data`, plus `symbols`, `start_date`, `end_date`, `bars` (business days in the file; `null` for market-data), `available_sources`, `default_source` and `limits` (the [caps](#limits-rate-limits-and-api-keys) on a run). For market-data, the label comes from the sources of every symbol the service lists for this server.
 
 ```json
 {"source": "synthetic", "reported_source": "synthetic", "synthetic": true, "description": "...",
  "file": "data/sample_data.csv", "symbols": ["AAPL", "ABNB", "..."], "start_date": "2020-01-01",
- "end_date": "2024-12-31", "bars": 1305, "available_sources": ["synthetic"], "default_source": "synthetic"}
+ "end_date": "2024-12-31", "bars": 1305, "available_sources": ["synthetic"], "default_source": "synthetic",
+ "limits": {"max_symbols": 10, "max_range_days": 1827, "timeout_seconds": 90.0}}
 ```
 
 ## GET /api/strategies/
@@ -134,7 +177,7 @@ Same body as a backtest, except that `start_date` and `end_date` are optional an
 - `backtest_id`, `metrics`, `undefined_metrics` and `data`
 - `by_regime`: for each of `bull`, `bear` and `sideways`, the fields `days`, `compounded_return_pct`, `annualized_mean_return_pct`, `annualized_volatility_pct` (`null` for a regime with a single day) and `undefined_metrics`
 
-Only the synthetic file has regime labels. When market-data is the server's default, send `"data_source": "synthetic"`; otherwise the request is a 400.
+Only the synthetic file has regime labels. When market-data is the server's default, send `"data_source": "synthetic"`; otherwise the request is a 400. The run counts against the same rate limit, caps and time limit as `POST /api/backtest/`; without `symbols` it would select all 25 and exceed the default symbol cap.
 
 ## Undefined metrics
 

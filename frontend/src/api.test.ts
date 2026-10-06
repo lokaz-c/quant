@@ -34,6 +34,20 @@ describe('api', () => {
     expect(error).toMatchObject({ status: 400, message: 'Unknown symbol(s): NOPE' })
   })
 
+  it('reads the problem detail, and says when to retry after a 429', async () => {
+    const problem = { title: 'Bad Request', status: 400, detail: 'The period is 2,000 days', error: 'old field' }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(problem), { status: 400 })))
+    await expect(api.runs()).rejects.toThrow('The period is 2,000 days')
+
+    const limited = new Response(JSON.stringify({ status: 429, detail: 'Rate limit of 5 per 1 minute exceeded' }), {
+      status: 429,
+      headers: { 'Retry-After': '37' },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(limited))
+    const error = await api.startRun({} as never).catch((e: unknown) => e)
+    expect(error).toMatchObject({ status: 429, message: 'Too many requests from this address. Try again in 37 s.' })
+  })
+
   it('falls back to the status line when the body is not JSON', async () => {
     vi.stubGlobal(
       'fetch',

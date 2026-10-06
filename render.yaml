@@ -1,11 +1,49 @@
+# Render Blueprint for quant. NOT ACTIVE: Render only reads this file when
+# someone creates a Blueprint from it in the dashboard (New > Blueprint). The
+# steps are in the README's "Deploying" section. One Docker service serves the
+# API and the React frontend; the database is Neon's free PostgreSQL, not
+# Render Postgres (whose free databases expire after 30 days).
 services:
   - type: web
+    runtime: docker
     name: quant-portfolio-simulator
-    env: python
-    buildCommand: "pip install -r requirements.txt && python init_db.py"
-    startCommand: "gunicorn app.main:app"
+    # Must be explicit: without it Render creates a paid instance
+    plan: free
+    # Same area as the Neon database (AWS us-west-2) and the market-data service
+    region: oregon
+    branch: main
+    # The multi-stage Dockerfile: Node 24 builds frontend/dist, then the Python
+    # image. Its command runs `python init_db.py` (alembic upgrade head and the
+    # seed) before gunicorn, because free services have no pre-deploy command.
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Liveness only: no database call, so Render's checks every few seconds
+    # never keep Neon's compute awake
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
+      # Neon connection string, e.g. postgresql://<user>:<password>@<host>/neondb?sslmode=require
       - key: DATABASE_URL
-        value: sqlite:///quant.db
+        sync: false
+      # Optional: comma-separated origins that may call /api from a browser.
+      # Not needed for the bundled frontend (same origin) or for TradeDesk (server side).
+      - key: QUANT_CORS_ORIGINS
+        sync: false
+      # Optional: SHA-256 hex digest(s) of the key TradeDesk sends as X-API-Key
+      - key: QUANT_API_KEY_SHA256
+        sync: false
+      # Cloudflare sets this on every request to a Render service and overwrites
+      # any client value, so the rate limits key on the real client address
+      - key: QUANT_CLIENT_IP_HEADER
+        value: CF-Connecting-IP
+      # Synthetic data in public until Alpaca gives written consent for display
+      - key: QUANT_DATA_SOURCE
+        value: synthetic
+      # Optional: the market-data service, offered as a second source
+      - key: MARKET_DATA_URL
+        sync: false
+      # Leave empty in public: with a key the service also serves Alpaca data
+      - key: MARKET_DATA_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true

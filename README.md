@@ -23,6 +23,8 @@ flowchart LR
     metrics --> service["BacktestService"]
     service --> db[("PostgreSQL or SQLite")]
     migrations["Alembic migrations"] --> db
+    db --> sqlcheck["sql/metrics.sql<br/>window functions"]
+    sqlcheck -. "CI: must match" .-> metrics
     api["Flask REST API"] --> service
     ui["Dashboard<br/>Chart.js"] --> api
     strategies --> trader["LiveTrader"]
@@ -59,7 +61,7 @@ make dev          # http://localhost:8000
 make test
 ```
 
-`make help` lists the other targets: `migrate`, `test-pg`, `data`, `results`, `bench`, `down`, `db-shell`.
+`make help` lists the other targets: `migrate`, `test-pg`, `sql-check`, `data`, `results`, `bench`, `down`, `db-shell`.
 
 ## Results
 
@@ -99,23 +101,25 @@ The machine was busy with other work during this run; its load average is record
   - returns and risk: total return, CAGR, max drawdown, annualised volatility, Sharpe (2% risk-free)
   - trades: win rate, average win and loss, profit factor, trade count, win and loss streaks
   - returns split by regime
+- **SQL cross-check** (`sql/metrics.sql`): max drawdown, volatility, Sharpe and a 63-day rolling Sharpe, recomputed in PostgreSQL from the stored equity curve with window functions (a running `MAX() OVER`, `LAG`, and `STDDEV_SAMP()` over a `ROWS BETWEEN 62 PRECEDING` frame). CI checks them against the Python metrics: within 1e-9 on the same stored values, and within 1e-5 against the engine's unrounded numbers. `make sql-check` runs the comparison on the 12 benchmark runs. Conventions and tolerances are in [docs/sql-metrics.md](docs/sql-metrics.md).
 - **API and dashboard** (`app/`, `templates/index.html`): run a backtest, list and compare runs, and run a regime analysis. The dashboard plots the stored equity curve and drawdown and lists the trades. See [docs/api.md](docs/api.md).
 - **Storage**: SQLAlchemy models (`app/models/database.py`), with SQLite locally and PostgreSQL in Docker. Alembic migrations (`migrations/`) own the schema: money in `NUMERIC(18, 4)`, timestamps in `TIMESTAMPTZ`, CHECK constraints on the status columns and trade side, and a unique index on `equity_curve(backtest_run_id, timestamp)`. See [docs/database.md](docs/database.md) for the type choices.
 - **Paper trading** (`live_trading/`): an alpaca-py adapter and a `LiveTrader` that runs any of the strategies, optionally with the risk layer. Paper trading is the default; live trading needs both `paper=False` and `QUANT_ALLOW_LIVE_TRADING=yes`. See [docs/live-trading.md](docs/live-trading.md).
 
 ## Tests and CI
 
-There are 117 pytest tests (`pytest --collect-only -q`). They cover:
+There are 129 pytest tests (`pytest --collect-only -q`). They cover:
 
 - the data generator: cross-process determinism under different `PYTHONHASHSEED` values, and that the committed CSV matches the generator
 - the Markov chain: empirical transition frequencies and mean regime durations against the matrix
 - strategy signals, metrics, portfolio accounting and risk rules
 - the Flask API, on temporary SQLite and on PostgreSQL
+- the SQL cross-check: `sql/metrics.sql` against the Python metrics on six stored runs, a known-answer drawdown case and a flat curve
 - the Alembic migrations, on SQLite and PostgreSQL: upgrade to head and downgrade to base, the models matching the head revision, the CHECK constraints and unique index rejecting bad rows, adopting a database created before Alembic, and existing rows surviving the type changes
 - the paper-trading adapter, with fake clients
 - that the results report is reproducible
 
-19 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. mypy runs on the engine as an advisory step and does not fail the build.
+27 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. mypy runs on the engine as an advisory step and does not fail the build.
 
 ## Limitations
 
@@ -134,6 +138,7 @@ There are 117 pytest tests (`pytest --collect-only -q`). They cover:
 - [docs/benchmark.md](docs/benchmark.md): timings (generated)
 - [docs/api.md](docs/api.md): REST API
 - [docs/database.md](docs/database.md): schema, migrations and column types
+- [docs/sql-metrics.md](docs/sql-metrics.md): the SQL cross-check, its conventions and tolerances
 - [docs/live-trading.md](docs/live-trading.md): Alpaca paper trading
 
 ## Deploying

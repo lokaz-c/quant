@@ -3,8 +3,10 @@ Backtest service layer
 Handles business logic for running and managing backtests
 """
 import os
-from datetime import datetime
+from bisect import bisect_left
+from datetime import date, datetime
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple, Union
 from app.models.database import (
@@ -46,6 +48,32 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value is not None else None
 
 
+class InvalidRequest(ValueError):
+    """
+    A client error: an unknown strategy or risk profile, or bad parameters,
+    dates, symbols or capital. The API answers 400 with the message.
+    """
+
+
+# NUMERIC(18, 4) holds values below 1e14; this leaves room for gains
+MAX_INITIAL_CAPITAL = 1e12
+
+
+@lru_cache(maxsize=4)
+def _data_index(path: str, mtime: float) -> Tuple[Tuple[str, ...], Tuple[date, ...]]:
+    """Symbols and bar dates of a data file (cached per path and mtime)"""
+    data = DataLoader(path).load_csv()
+    dates = sorted({ts.date() for ts in data['timestamp']})
+    return tuple(sorted(data['symbol'].unique().tolist())), tuple(dates)
+
+
+def _parse_date(value, field: str) -> date:
+    try:
+        return datetime.strptime(str(value), '%Y-%m-%d').date()
+    except ValueError:
+        raise InvalidRequest(f'{field} must be a date in YYYY-MM-DD form')
+
+
 class BacktestService:
     """Service for managing backtests"""
 
@@ -58,6 +86,15 @@ class BacktestService:
             'Trend Following': TrendFollowing
         }
 
+    def _index(self) -> Tuple[Tuple[str, ...], Tuple[date, ...]]:
+        return _data_index(self.DATA_PATH, os.path.getmtime(self.DATA_PATH))
+
+    def data_info(self) -> Dict:
+        """The data file's label, symbols, date range and number of bars"""
+        symbols, dates = self._index()
+        return {**DATA_SOURCE, 'symbols': list(symbols), 'start_date': dates[0].isoformat(),
+                'end_date': dates[-1].isoformat(), 'bars': len(dates)}
+
     def run_backtest(
         self,
         strategy_name: str,
@@ -66,12 +103,21 @@ class BacktestService:
         end_date: str,
         initial_capital: float,
         symbols: Optional[List[str]] = None,
-        market_regime: Optional[str] = None
+        market_regime: Optional[str] = None,
+        parameters: Optional[Dict] = None,
+        compare_to_baseline: bool = False
     ) -> Dict:
-        """Run a backtest and store results"""
+        """
+        Run a backtest and store results.
+
+        parameters: overrides for the strategy's stored parameters.
+        compare_to_baseline: also run the same inputs with the risk layer off
+        first, store it, and link this run to it (`baseline` in the response).
+        Ignored when the chosen profile already has the risk layer off.
+        """
         response, _ = self.run_backtest_with_results(
             strategy_name, risk_config_name, start_date, end_date, initial_capital,
-            symbols, market_regime)
+            symbols, market_regime, parameters, compare_to_baseline)
         return response
 
     def run_backtest_with_results(
@@ -82,31 +128,100 @@ class BacktestService:
         end_date: str,
         initial_capital: float,
         symbols: Optional[List[str]] = None,
-        market_regime: Optional[str] = None
+        market_regime: Optional[str] = None,
+        parameters: Optional[Dict] = None,
+        compare_to_baseline: bool = False
     ) -> Tuple[Dict, Dict]:
         """
         run_backtest(), plus the engine's in-memory results: the float64
         equity curve before it is stored as NUMERIC, and every trade. The SQL
         cross-check compares against these.
         """
+        self._validate_inputs(start_date, end_date, initial_capital, symbols)
 
+        baseline = None
+        if compare_to_baseline:
+            with get_db() as db:
+                chosen = db.query(RiskConfig).filter(RiskConfig.name == risk_config_name).first()
+                risk_layer_on = chosen is not None and bool(chosen.enabled)
+                baseline_profile = (db.query(RiskConfig).filter(RiskConfig.enabled.is_(False))
+                                    .order_by(RiskConfig.id).first())
+                baseline_name = baseline_profile.name if baseline_profile else None
+            if risk_layer_on:
+                if baseline_name is None:
+                    raise InvalidRequest('No risk profile with the risk layer off to compare against')
+                baseline, _ = self._run(strategy_name, baseline_name, start_date, end_date,
+                                        initial_capital, symbols, market_regime, parameters)
+
+        response, results = self._run(
+            strategy_name, risk_config_name, start_date, end_date, initial_capital, symbols,
+            market_regime, parameters,
+            baseline_run_id=baseline['backtest_id'] if baseline else None)
+        response['baseline'] = (
+            {'backtest_id': baseline['backtest_id'], 'risk_config': baseline_name,
+             'metrics': baseline['metrics']}
+            if baseline else None)
+        return response, results
+
+    def _validate_inputs(self, start_date, end_date, initial_capital, symbols) -> None:
+        start, end = _parse_date(start_date, 'start_date'), _parse_date(end_date, 'end_date')
+        if start > end:
+            raise InvalidRequest('start_date must not be after end_date')
+        known_symbols, dates = self._index()
+        first_bar = bisect_left(dates, start)
+        if first_bar == len(dates) or dates[first_bar] > end:
+            raise InvalidRequest(f'No bars between {start} and {end}; the data covers '
+                                 f'{dates[0]} to {dates[-1]} (business days)')
+
+        if isinstance(initial_capital, bool) or not isinstance(initial_capital, (int, float)):
+            raise InvalidRequest('initial_capital must be a number')
+        if not 0 < initial_capital <= MAX_INITIAL_CAPITAL:
+            raise InvalidRequest(f'initial_capital must be above 0 and at most {MAX_INITIAL_CAPITAL:,.0f}')
+
+        if symbols is not None:
+            if not isinstance(symbols, list) or not symbols or not all(isinstance(s, str) for s in symbols):
+                raise InvalidRequest('symbols must be a non-empty list of strings')
+            unknown = sorted(set(symbols) - set(known_symbols))
+            if unknown:
+                raise InvalidRequest(f"Unknown symbol(s): {', '.join(unknown)}")
+
+    def _run(
+        self,
+        strategy_name: str,
+        risk_config_name: str,
+        start_date: str,
+        end_date: str,
+        initial_capital: float,
+        symbols: Optional[List[str]],
+        market_regime: Optional[str],
+        parameters: Optional[Dict],
+        baseline_run_id: Optional[int] = None
+    ) -> Tuple[Dict, Dict]:
+        """Run one backtest and store it"""
         with get_db() as db:
             # Get strategy from database
             strategy_db = db.query(Strategy).filter(Strategy.name == strategy_name).first()
             if not strategy_db:
-                raise ValueError(f"Strategy not found: {strategy_name}")
+                raise InvalidRequest(f"Strategy not found: {strategy_name}")
 
             # Get risk config from database
             risk_config_db = db.query(RiskConfig).filter(RiskConfig.name == risk_config_name).first()
             if not risk_config_db:
-                raise ValueError(f"Risk configuration not found: {risk_config_name}")
+                raise InvalidRequest(f"Risk configuration not found: {risk_config_name}")
 
             # Create strategy instance
             strategy_class = self.strategy_map.get(strategy_name)
             if not strategy_class:
-                raise ValueError(f"Strategy implementation not found: {strategy_name}")
+                raise InvalidRequest(f"Strategy implementation not found: {strategy_name}")
 
-            strategy = strategy_class(strategy_db.parameters)
+            if parameters is not None and not isinstance(parameters, dict):
+                raise InvalidRequest('parameters must be an object')
+            try:
+                strategy_parameters = strategy_class.validate_parameters(
+                    {**(strategy_db.parameters or {}), **(parameters or {})})
+            except ValueError as e:
+                raise InvalidRequest(str(e))
+            strategy = strategy_class(strategy_parameters)
 
             # Create risk config
             risk_config = EngineRiskConfig(
@@ -123,12 +238,14 @@ class BacktestService:
             backtest_run = BacktestRun(
                 strategy_id=strategy_db.id,
                 risk_config_id=risk_config_db.id,
-                start_date=datetime.strptime(start_date, '%Y-%m-%d').date(),
-                end_date=datetime.strptime(end_date, '%Y-%m-%d').date(),
+                start_date=_parse_date(start_date, 'start_date'),
+                end_date=_parse_date(end_date, 'end_date'),
                 initial_capital=initial_capital,
                 symbols=symbols,
                 market_regime=market_regime,
-                status='running'
+                status='running',
+                strategy_parameters=strategy_parameters,
+                baseline_run_id=baseline_run_id
             )
             db.add(backtest_run)
             db.flush()
@@ -252,6 +369,8 @@ class BacktestService:
                 'initial_capital': _num(backtest_run.initial_capital),
                 'symbols': backtest_run.symbols,
                 'market_regime': backtest_run.market_regime,
+                'strategy_parameters': backtest_run.strategy_parameters,
+                'baseline_run_id': backtest_run.baseline_run_id,
                 'status': backtest_run.status,
                 'created_at': _iso(backtest_run.created_at),
                 'metrics': {
@@ -303,7 +422,7 @@ class BacktestService:
             if strategy_id:
                 query = query.filter(BacktestRun.strategy_id == strategy_id)
 
-            backtests = query.order_by(BacktestRun.created_at.desc()).limit(limit).all()
+            backtests = query.order_by(BacktestRun.created_at.desc(), BacktestRun.id.desc()).limit(limit).all()
 
             result = []
             for bt in backtests:
@@ -317,6 +436,9 @@ class BacktestService:
                     'risk_config': bt.risk_config.name,
                     'start_date': bt.start_date.isoformat(),
                     'end_date': bt.end_date.isoformat(),
+                    'symbols': bt.symbols,
+                    'initial_capital': _num(bt.initial_capital),
+                    'baseline_run_id': bt.baseline_run_id,
                     'status': bt.status,
                     'total_return': metrics.total_return if metrics else None,
                     'max_drawdown': metrics.max_drawdown if metrics else None,
@@ -332,7 +454,7 @@ class BacktestService:
         comparison = self.get_backtest_results(comparison_id)
 
         if not baseline or not comparison:
-            raise ValueError("One or both backtests not found")
+            raise LookupError("One or both backtests not found")
 
         baseline_metrics = baseline['metrics']
         comparison_metrics = comparison['metrics']
@@ -380,7 +502,7 @@ class BacktestService:
         if 'regime' not in data.columns:
             raise ValueError('The data file has no regime column, so returns cannot be split by regime')
         if data.empty:
-            raise ValueError('No data for the requested symbols')
+            raise InvalidRequest('No data for the requested symbols')
 
         start_date = start_date or data['timestamp'].min().strftime('%Y-%m-%d')
         end_date = end_date or data['timestamp'].max().strftime('%Y-%m-%d')

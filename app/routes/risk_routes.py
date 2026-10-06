@@ -2,6 +2,7 @@
 Risk configuration API routes
 """
 from flask import Blueprint, request, jsonify
+from app.routes.errors import server_error
 from app.models.database import get_db, RiskConfig
 
 bp = Blueprint('risk', __name__, url_prefix='/api/risk-configs')
@@ -30,8 +31,8 @@ def list_risk_configs():
 
         return jsonify(result), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except Exception:
+        return server_error()
 
 
 @bp.route('/<int:config_id>', methods=['GET'])
@@ -57,5 +58,5 @@ def get_risk_config(config_id):
 
         return jsonify(result), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except Exception:
+        return server_error()

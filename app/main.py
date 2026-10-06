@@ -1,15 +1,26 @@
 """
-Main Flask application
+Main Flask application: the REST API under /api, and the React frontend
+(frontend/, built by Vite into frontend/dist) at /.
 """
 import os
-from flask import Flask, render_template, send_from_directory
+from pathlib import Path
+
+from flask import Flask, abort, send_from_directory
 from flask_cors import CORS
-from app.routes import backtest_routes, strategy_routes, risk_routes
+
+from app.routes import backtest_routes, data_routes, risk_routes, strategy_routes
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_FRONTEND_DIST = REPO_ROOT / 'frontend' / 'dist'
+
+NOT_BUILT = ('The frontend is not built. Run `make frontend` (needs Node 24), or use '
+             '`make run` for the Docker build. The API is at /api.\n')
 
 
-def create_app():
+def create_app(frontend_dist=None):
     """Application factory"""
-    app = Flask(__name__, template_folder='../templates', static_folder='../static')
+    app = Flask(__name__, static_folder=None)
+    dist = Path(frontend_dist or os.getenv('FRONTEND_DIST', DEFAULT_FRONTEND_DIST))
 
     # Configuration
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
@@ -22,17 +33,36 @@ def create_app():
     app.register_blueprint(backtest_routes.bp)
     app.register_blueprint(strategy_routes.bp)
     app.register_blueprint(risk_routes.bp)
-
-    # Web UI routes
-    @app.route('/')
-    def index():
-        """Serve the main UI"""
-        return render_template('index.html')
+    app.register_blueprint(data_routes.bp)
 
     @app.route('/health')
     def health():
         """Health check endpoint"""
         return {'status': 'healthy'}, 200
+
+    # Frontend. Vite writes index.html plus content-hashed files under
+    # assets/, so those can be cached for good; index.html must not be.
+    @app.route('/')
+    def index():
+        if not (dist / 'index.html').is_file():
+            return NOT_BUILT, 503, {'Content-Type': 'text/plain; charset=utf-8'}
+        response = send_from_directory(dist, 'index.html')
+        response.headers['Cache-Control'] = 'no-cache'
+        return response
+
+    @app.route('/assets/<path:filename>')
+    def assets(filename):
+        response = send_from_directory(dist / 'assets', filename)
+        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        return response
+
+    @app.route('/<path:filename>')
+    def public_file(filename):
+        # Files Vite copies from frontend/public (e.g. favicon.svg). Paths
+        # under /api/ never fall through to a file.
+        if filename.startswith('api/') or not (dist / filename).is_file():
+            abort(404)
+        return send_from_directory(dist, filename)
 
     return app
 

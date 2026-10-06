@@ -23,6 +23,7 @@ from typing import List, Optional
 
 from backtest_engine import strategy_base
 from backtest_engine.backtester import Backtester
+from backtest_engine import data_loader
 from backtest_engine.data_loader import DataLoader
 from backtest_engine.strategies.moving_average import MovingAverageCrossover
 from scripts.bench import CASES, DATA_PATH, load_average, machine_info
@@ -37,6 +38,8 @@ def make_backtester(case: int) -> Backtester:
 
 
 def run_quietly(backtester: Backtester) -> float:
+    # Parse the CSV inside the profiled run, as `make bench` does (older checkouts have no cache)
+    getattr(data_loader, 'clear_csv_cache', lambda: None)()
     began = time.perf_counter()
     with contextlib.redirect_stdout(io.StringIO()):   # the engine prints progress
         backtester.run()

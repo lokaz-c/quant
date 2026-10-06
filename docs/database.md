@@ -23,6 +23,7 @@ New migration: change the models, then `alembic revision --autogenerate -m "..."
 | `0002` | Money columns to `NUMERIC`, timestamps to `TIMESTAMPTZ`, CHECK constraints, and a unique index on `equity_curve(backtest_run_id, timestamp)`. |
 | `0003` | `backtest_runs.strategy_parameters` (the parameters a run used: the stored defaults merged with the request's overrides) and `backtest_runs.baseline_run_id` (a self-reference to the unmanaged run on the same inputs, `ON DELETE SET NULL`). Existing rows get `NULL`. |
 | `0004` | Where a run's bars came from: `backtest_runs.data_source` (`synthetic` for the local file, `market-data` for the service), `reported_source` (what the service said: `alpaca`, `synthetic`, or `mixed` across symbols), `symbol_sources` (per symbol) and `price_adjustment` (`split` or `raw`). Every earlier run used the local file, so existing rows get `synthetic` for both. See [market-data.md](market-data.md). |
+| `0005` | Undefined metrics: `backtest_metrics.undefined_metrics` (JSON, metric -> reason) and a CHECK constraint on each double precision metric column that allows only `NULL` or a finite number. Before it, PostgreSQL stored `NaN` volatility and Sharpe for a run with one daily return (SQLite stored `NULL`). The upgrade sets any existing `NaN` or infinity to `NULL` first. See [Undefined metrics](#undefined-metrics). |
 
 ## Column types
 
@@ -57,6 +58,23 @@ CHECK constraints list exactly the values the code writes:
 
 `data_source` and `reported_source` default to `synthetic`, so a writer that leaves them out labels a run synthetic, never real.
 
+`ck_backtest_metrics_<column>_finite` (migration `0005`) on `total_return`, `cagr`, `max_drawdown`, `volatility`, `sharpe_ratio` and `win_rate`: `<column> IS NULL OR <column> BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308`. PostgreSQL's `double precision` accepts `'NaN'`, `'Infinity'` and `'-Infinity'`. `NaN` sorts above every number there, so it fails the `BETWEEN` like the infinities do. SQLite stores `NaN` as `NULL` and an infinity as a `REAL` outside the range.
+
+### Undefined metrics
+
+A metric with no value for a run is `NULL`, never a stand-in number:
+
+| Column | `NULL` when | Reason recorded |
+| --- | --- | --- |
+| `volatility` | fewer than two daily returns | `fewer than two daily returns` |
+| `sharpe_ratio` | fewer than two daily returns, or zero volatility | `fewer than two daily returns`, `zero volatility` |
+| `cagr` | the run covers a single day | `the run starts and ends on the same day` |
+| `win_rate` | no closed trades | `no closed trades` |
+| `avg_win` | no closed trades, or none that won | `no closed trades`, `no winning trades` |
+| `avg_loss` | no closed trades, or none that lost | `no closed trades`, `no losing trades` |
+
+`undefined_metrics` holds the reasons, e.g. `{"sharpe_ratio": "zero volatility", "profit_factor": "no losing trades"}`; it also records the profit factor, which has no column. Any other non-finite result (a CAGR that overflows over a very short run) is `NULL` with the reason `the result is not a finite number`. Rows from before `0005` keep their values (their Sharpe for a flat curve is `0`), except that `NaN` and infinities became `NULL` with no recorded reason.
+
 `ix_equity_curve_run_timestamp` is a unique index on `equity_curve(backtest_run_id, timestamp)`. It is unique because the engine records exactly one equity point per bar, so a duplicate would mean a bug, and it would distort any metric computed from the curve. It is the access path for loading a run's curve in time order. It replaces the single-column `idx_equity_curve_run`, which it makes redundant: a B-tree on `(a, b)` also serves lookups on `a`.
 
 ## SQLite
@@ -78,6 +96,7 @@ SQLite is supported for local development (`make dev`) and the default test run.
 - each CHECK constraint and the unique index reject a bad row, and the same statement with valid values succeeds;
 - a pre-Alembic database is stamped and upgraded with its rows intact;
 - the provenance constraints reject unknown or contradictory labels, and runs from before `0004` read as synthetic;
+- the metric columns reject `NaN` and infinities, and the `0005` upgrade turns existing ones into `NULL`;
 - PostgreSQL only: the column types after the upgrade, and that existing rows survive the upgrade and the downgrade (values rounded to the new scale, timestamps unchanged).
 
 The API tests in `tests/test_api.py` and `tests/test_api_data_source.py` also run on both databases. `make test-pg` starts a throwaway `postgres:15-alpine` container and runs the whole suite against it. CI uses a PostgreSQL service container and sets `QUANT_REQUIRE_POSTGRES=1`, so a missing database fails the build instead of skipping the tests.

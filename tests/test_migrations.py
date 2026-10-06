@@ -6,6 +6,8 @@ Alembic migrations, on SQLite and on a real PostgreSQL (see conftest.py).
 - the CHECK constraints and the unique equity-curve index reject bad rows
 - a pre-Alembic database is adopted (stamped 0001, then upgraded)
 - 0004: the data-provenance CHECK constraints, and older runs labelled synthetic
+- 0005: metric columns hold NULL or a finite number; older NaN and infinities
+  become NULL
 - PostgreSQL only: the column types, and that existing rows survive the
   FLOAT -> NUMERIC and TIMESTAMP -> TIMESTAMPTZ conversion and its downgrade
 """
@@ -63,7 +65,7 @@ def insert_run(conn, status='completed'):
 
 
 def test_head_is_the_latest_revision():
-    assert HEAD == '0004'
+    assert HEAD == '0005'
 
 
 def test_upgrade_to_head_and_downgrade_to_base(db_engine):
@@ -250,3 +252,52 @@ def test_provenance_values_match_what_the_code_writes():
     assert DATA_SOURCES == sources.DATA_SOURCES
     assert REPORTED_SOURCES == sources.REPORTED_SOURCES
     assert PRICE_ADJUSTMENTS == ADJUSTMENTS
+
+
+INSERT_METRICS = ("INSERT INTO backtest_metrics (backtest_run_id, sharpe_ratio, volatility) "
+                  "VALUES (1, :value, 1.0)")
+# Written as SQL literals: PostgreSQL parses 'NaN' and 'Infinity' for double
+# precision; SQLite has no NaN (it stores NULL) but 9e999 is +Inf
+NON_FINITE = {'postgresql': ["'NaN'", "'Infinity'", "'-Infinity'"], 'sqlite': ['9e999', '-9e999']}
+
+
+def test_metric_columns_reject_nan_and_infinities(db_engine):
+    migrate(db_engine, 'upgrade', 'head')
+    with db_engine.begin() as conn:
+        insert_run(conn)
+        conn.execute(text(INSERT_METRICS), {'value': None})   # NULL: an undefined metric
+        conn.execute(text(INSERT_METRICS), {'value': -28.5})  # any finite number
+    for literal in NON_FINITE[db_engine.dialect.name]:
+        with pytest.raises(IntegrityError):
+            with db_engine.begin() as conn:
+                conn.execute(text(f'INSERT INTO backtest_metrics (backtest_run_id, sharpe_ratio) '
+                                  f'VALUES (1, {literal})'))
+
+
+def test_0005_nulls_the_non_finite_values_older_runs_stored(db_engine):
+    migrate(db_engine, 'upgrade', '0004')
+    literals = NON_FINITE[db_engine.dialect.name]
+    with db_engine.begin() as conn:
+        insert_run(conn)
+        for i, literal in enumerate(literals):
+            conn.execute(text(f'INSERT INTO backtest_metrics (id, backtest_run_id, volatility, sharpe_ratio, '
+                              f'win_rate) VALUES ({i + 1}, 1, {literal}, {literal}, 50.0)'))
+    migrate(db_engine, 'upgrade', 'head')
+    with db_engine.connect() as conn:
+        rows = conn.execute(text('SELECT volatility, sharpe_ratio, win_rate, undefined_metrics '
+                                 'FROM backtest_metrics ORDER BY id')).all()
+    assert [tuple(r) for r in rows] == [(None, None, 50.0, None)] * len(literals)
+
+    migrate(db_engine, 'downgrade', '0004')
+    assert 'undefined_metrics' not in {c['name'] for c in inspect(db_engine).get_columns('backtest_metrics')}
+
+
+def test_finite_constraint_columns_match_the_model():
+    from app.models.database import FINITE_METRIC_COLUMNS, BacktestMetrics
+    from sqlalchemy import Float
+
+    migration = ScriptDirectory.from_config(alembic_config()).get_revision('0005').module
+    assert migration.METRIC_COLUMNS == FINITE_METRIC_COLUMNS
+    # every double precision column of backtest_metrics is checked
+    floats = {c.name for c in BacktestMetrics.__table__.columns if isinstance(c.type, Float)}
+    assert floats == set(FINITE_METRIC_COLUMNS)

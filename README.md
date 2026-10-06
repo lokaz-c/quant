@@ -2,9 +2,13 @@
 
 [![CI](https://github.com/lokaz-c/quant/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lokaz-c/quant/actions/workflows/ci.yml)
 
-A daily-bar backtesting engine with three strategies, a risk layer that can be switched on and off, a performance-metrics module, a Flask REST API with a small dashboard, and a paper-trading adapter for Alpaca. I built it to answer one question: what does a simple risk layer (position caps, stop-losses, a drawdown halt) do to a strategy compared with running it unmanaged? I wanted the answer measured by code anyone can re-run.
+A daily-bar backtesting engine with three strategies, a risk layer that can be switched on and off, a performance-metrics module, a Flask REST API with a React + TypeScript frontend, and a paper-trading adapter for Alpaca. I built it to answer one question: what does a simple risk layer (position caps, stop-losses, a drawdown halt) do to a strategy compared with running it unmanaged? I wanted the answer measured by code anyone can re-run.
 
 **The price data is synthetic.** It comes from a seeded generator: a Markov chain switches between bull, bear and sideways regimes, and each symbol follows a geometric Brownian motion with the current regime's drift and volatility. Ticker names are labels only. See [docs/data.md](docs/data.md). Any CSV with `timestamp, symbol, open, high, low, close, volume` columns can be used instead.
+
+![The app after one run: the Conservative risk profile against the unmanaged baseline](docs/screenshot.png)
+
+*A local run (`make dev`, SQLite) on the synthetic sample data: Moving Average Crossover on 5 symbols over 2023, with the Conservative profile against the same run with the risk layer off. Captured by `python -m scripts.screenshot`.*
 
 ## Architecture
 
@@ -26,7 +30,7 @@ flowchart LR
     db --> sqlcheck["sql/metrics.sql<br/>window functions"]
     sqlcheck -. "CI: must match" .-> metrics
     api["Flask REST API"] --> service
-    ui["Dashboard<br/>Chart.js"] --> api
+    ui["React + TypeScript (Vite)<br/>built into frontend/dist, served by Flask"] --> api
     strategies --> trader["LiveTrader"]
     risk --> trader
     trader --> broker["AlpacaBroker<br/>paper by default"]
@@ -50,18 +54,21 @@ make run          # docker compose up --build: PostgreSQL 15 + the app
 # open http://localhost:8000  (QUANT_PORT=9000 make run to use another port)
 ```
 
-I checked this from a clean clone. It needs Docker. The sample data is committed. On start, `init_db.py` brings the schema to the latest migration (`alembic upgrade head`) and seeds the strategies and risk profiles from `config/`.
+I checked this from a clean clone. It needs only Docker: the image build compiles the frontend in a Node 24 stage, and Flask serves it with the API. The sample data is committed. On start, `init_db.py` brings the schema to the latest migration (`alembic upgrade head`) and seeds the strategies and risk profiles from `config/`.
 
-Without Docker (Python 3.10 or 3.11, SQLite):
+Without Docker (Python 3.10 or 3.11 and Node 24, SQLite):
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 make install
-make dev          # http://localhost:8000
-make test
+make dev            # builds frontend/dist, then serves app and API on http://localhost:8000
+make test           # Python tests
+make test-frontend  # TypeScript check and vitest
 ```
 
-`make help` lists the other targets: `migrate`, `test-pg`, `sql-check`, `data`, `results`, `bench`, `down`, `db-shell`.
+For frontend work, run `make frontend-dev` next to `make dev`. It serves the app with hot reload on http://localhost:5173 and proxies `/api` to Flask.
+
+`make help` lists the other targets: `frontend`, `migrate`, `test-pg`, `sql-check`, `data`, `results`, `bench`, `down`, `db-shell`.
 
 ## Results
 
@@ -102,24 +109,29 @@ The machine was busy with other work during this run; its load average is record
   - trades: win rate, average win and loss, profit factor, trade count, win and loss streaks
   - returns split by regime
 - **SQL cross-check** (`sql/metrics.sql`): max drawdown, volatility, Sharpe and a 63-day rolling Sharpe, recomputed in PostgreSQL from the stored equity curve with window functions (a running `MAX() OVER`, `LAG`, and `STDDEV_SAMP()` over a `ROWS BETWEEN 62 PRECEDING` frame). CI checks them against the Python metrics: within 1e-9 on the same stored values, and within 1e-5 against the engine's unrounded numbers. `make sql-check` runs the comparison on the 12 benchmark runs. Conventions and tolerances are in [docs/sql-metrics.md](docs/sql-metrics.md).
-- **API and dashboard** (`app/`, `templates/index.html`): run a backtest, list and compare runs, and run a regime analysis. The dashboard plots the stored equity curve and drawdown and lists the trades. See [docs/api.md](docs/api.md).
+- **Frontend** (`frontend/`): React 19 and TypeScript, built by Vite and served by Flask from `frontend/dist`.
+  - a run form: strategy, parameters (checked against each strategy's limits), symbols, dates, capital and risk profile;
+  - the chosen profile against the same run with the risk layer off: metrics side by side, and equity and drawdown curves on shared axes;
+  - the closed trades of both runs, and the run history.
+  Charts use Recharts (MIT). A banner labels the data as synthetic. The look follows lorenzokamanzi.com: black and white, Inter, square corners.
+- **API** (`app/`): run a backtest (optionally with its unmanaged baseline), list and compare runs, run a regime analysis, and describe the data. Invalid input gets a 400 with the reason. See [docs/api.md](docs/api.md).
 - **Storage**: SQLAlchemy models (`app/models/database.py`), with SQLite locally and PostgreSQL in Docker. Alembic migrations (`migrations/`) own the schema: money in `NUMERIC(18, 4)`, timestamps in `TIMESTAMPTZ`, CHECK constraints on the status columns and trade side, and a unique index on `equity_curve(backtest_run_id, timestamp)`. See [docs/database.md](docs/database.md) for the type choices.
 - **Paper trading** (`live_trading/`): an alpaca-py adapter and a `LiveTrader` that runs any of the strategies, optionally with the risk layer. Paper trading is the default; live trading needs both `paper=False` and `QUANT_ALLOW_LIVE_TRADING=yes`. See [docs/live-trading.md](docs/live-trading.md).
 
 ## Tests and CI
 
-There are 129 pytest tests (`pytest --collect-only -q`). They cover:
+There are 182 pytest tests (`pytest --collect-only -q`) and 20 frontend tests (vitest). The pytest tests cover:
 
 - the data generator: cross-process determinism under different `PYTHONHASHSEED` values, and that the committed CSV matches the generator
 - the Markov chain: empirical transition frequencies and mean regime durations against the matrix
 - strategy signals, metrics, portfolio accounting and risk rules
-- the Flask API, on temporary SQLite and on PostgreSQL
+- the Flask API, on temporary SQLite and on PostgreSQL: parameter overrides, baseline pairs, input validation (400s with the reason), and serving the built frontend
 - the SQL cross-check: `sql/metrics.sql` against the Python metrics on six stored runs, a known-answer drawdown case and a flat curve
 - the Alembic migrations, on SQLite and PostgreSQL: upgrade to head and downgrade to base, the models matching the head revision, the CHECK constraints and unique index rejecting bad rows, adopting a database created before Alembic, and existing rows surviving the type changes
 - the paper-trading adapter, with fake clients
 - that the results report is reproducible
 
-27 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. mypy runs on the engine as an advisory step and does not fail the build.
+51 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. A separate job type-checks, tests (vitest: formatting, drawdown maths, the API client, the form, the comparison table, the whole page against a mocked API) and builds the frontend on Node 24. mypy runs on the engine as an advisory step and does not fail the build.
 
 ## Limitations
 
@@ -127,7 +139,7 @@ There are 129 pytest tests (`pytest --collect-only -q`). They cover:
 - **Optimistic fills.** Orders fill at the close of the bar that produced the signal, which assumes you can trade at a price only known at the close. There are no commissions, slippage, partial fills or shorting.
 - **Idle cash earns nothing**, while Sharpe subtracts a 2% risk-free rate.
 - **No cooldown after a stop-loss.** A strategy can re-enter on the same bar it was stopped out.
-- **Runtime grows with history.** Every bar re-filters the data and recomputes indicators over the full history (see the benchmark). A backtest runs inside the HTTP request, and gunicorn's timeout is 300 s.
+- **Runtime grows with history.** Every bar re-filters the data and recomputes indicators over the full history (see the benchmark). A backtest runs inside the HTTP request (two with the baseline on), and gunicorn's timeout is 300 s.
 - **Paper trading is only tested against fake clients.** It has not been run against a funded account.
 - **Risk profiles are hand-picked**, not fitted. mypy is advisory, not enforced.
 
@@ -143,7 +155,7 @@ There are 129 pytest tests (`pytest --collect-only -q`). They cover:
 
 ## Deploying
 
-`Dockerfile`, `render.yaml`, `Procfile` and `runtime.txt` are included. The app runs under gunicorn and reads `DATABASE_URL` and `SECRET_KEY` from the environment (see `.env.example`). It is not deployed anywhere at the moment.
+The `Dockerfile` builds the whole app: the frontend in a Node stage, then the Python image that serves it. The app runs under gunicorn and reads `DATABASE_URL` and `SECRET_KEY` from the environment (see `.env.example`). `render.yaml`, `Procfile` and `runtime.txt` predate the frontend and install only the Python side, so they would serve the API without the UI. It is not deployed anywhere at the moment.
 
 ## License
 

@@ -1,0 +1,108 @@
+import type { DataInfo, Metrics, RiskProfile, Run, RunSummary, Strategy } from '../api'
+
+export const dataInfo: DataInfo = {
+  synthetic: true,
+  file: 'data/sample_data.csv',
+  description: 'Synthetic daily bars from a seeded Markov regime-switching GBM (config/data_generator.json). Ticker names are labels only.',
+  symbols: ['AAPL', 'AMZN', 'GOOGL', 'JPM', 'MSFT', 'TSLA'],
+  start_date: '2020-01-01',
+  end_date: '2024-12-31',
+  bars: 1305,
+}
+
+export const strategies: Strategy[] = [
+  {
+    id: 1,
+    name: 'Moving Average Crossover',
+    description: 'Buys when the fast MA crosses above the slow MA',
+    parameters: { fast_period: 20, slow_period: 50 },
+    parameter_limits: {
+      fast_period: { type: 'int', min: 2, max: 200 },
+      slow_period: { type: 'int', min: 3, max: 400 },
+    },
+  },
+  {
+    id: 2,
+    name: 'Trend Following',
+    description: 'Breakout with an ATR stop',
+    parameters: { lookback_period: 20, atr_period: 14, atr_multiplier: 2 },
+    parameter_limits: {
+      lookback_period: { type: 'int', min: 2, max: 250 },
+      atr_period: { type: 'int', min: 2, max: 100 },
+      atr_multiplier: { type: 'float', min: 0.5, max: 10 },
+    },
+  },
+  { id: 3, name: 'Stored only', description: null, parameters: {}, parameter_limits: null },
+]
+
+export const riskProfiles: RiskProfile[] = [
+  { id: 1, name: 'No Risk Management', max_position_size: 1, max_portfolio_exposure: 1, stop_loss_pct: null, take_profit_pct: null, max_drawdown_pct: null, enabled: false },
+  { id: 2, name: 'Conservative', max_position_size: 0.15, max_portfolio_exposure: 0.6, stop_loss_pct: 0.05, take_profit_pct: 0.15, max_drawdown_pct: 0.2, enabled: true },
+]
+
+const metrics = (overrides: Partial<Metrics>): Metrics => ({
+  total_return: 0,
+  cagr: 0,
+  max_drawdown: 0,
+  volatility: 0,
+  sharpe_ratio: 0,
+  win_rate: 0,
+  avg_win: 0,
+  avg_loss: 0,
+  num_trades: 0,
+  final_equity: 100000,
+  ...overrides,
+})
+
+const curve = (values: number[]) =>
+  values.map((equity, i) => ({
+    timestamp: `2023-01-0${i + 2}T00:00:00+00:00`,
+    equity,
+    cash: equity,
+    positions_value: 0,
+  }))
+
+export const managedRun: Run = {
+  id: 12,
+  strategy: 'Moving Average Crossover',
+  risk_config: 'Conservative',
+  start_date: '2023-01-01',
+  end_date: '2023-12-31',
+  initial_capital: 100000,
+  symbols: ['AAPL', 'MSFT'],
+  strategy_parameters: { fast_period: 20, slow_period: 50 },
+  baseline_run_id: 11,
+  status: 'completed',
+  created_at: '2026-10-06T00:00:00+00:00',
+  metrics: metrics({ total_return: 4.5, max_drawdown: 3.25, sharpe_ratio: 0.41, num_trades: 9, final_equity: 104500 }),
+  equity_curve: curve([100000, 101000, 99000, 104500]),
+  trades: [
+    { symbol: 'AAPL', entry_date: '2023-01-03T00:00:00+00:00', exit_date: '2023-01-05T00:00:00+00:00', entry_price: 150, exit_price: 160, quantity: 10.5, side: 'sell', pnl: 105, pnl_pct: 6.67, status: 'closed' },
+  ],
+}
+
+export const baselineRun: Run = {
+  ...managedRun,
+  id: 11,
+  risk_config: 'No Risk Management',
+  baseline_run_id: null,
+  metrics: metrics({ total_return: 1.5, max_drawdown: 8.75, sharpe_ratio: -0.2, num_trades: 7, final_equity: 101500 }),
+  equity_curve: curve([100000, 102000, 93000, 101500]),
+  trades: [],
+}
+
+export const history: RunSummary[] = [managedRun, baselineRun].map((r) => ({
+  id: r.id,
+  strategy: r.strategy,
+  risk_config: r.risk_config,
+  start_date: r.start_date,
+  end_date: r.end_date,
+  symbols: r.symbols,
+  initial_capital: r.initial_capital,
+  baseline_run_id: r.baseline_run_id,
+  status: r.status,
+  total_return: r.metrics!.total_return,
+  max_drawdown: r.metrics!.max_drawdown,
+  sharpe_ratio: r.metrics!.sharpe_ratio,
+  created_at: r.created_at,
+}))

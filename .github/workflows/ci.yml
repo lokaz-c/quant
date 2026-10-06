@@ -53,7 +53,7 @@ jobs:
         pip install -r requirements-live.txt
 
     - name: Run tests
-      run: pytest --cov=backtest_engine --cov=app --cov=live_trading --ignore=tests/test_sql_metrics.py
+      run: pytest --cov=backtest_engine --cov=app --cov=live_trading --cov=data_sources --ignore=tests/test_sql_metrics.py
 
     # sql/metrics.sql (window functions) against the Python metrics, on the
     # PostgreSQL service; see docs/sql-metrics.md

@@ -76,6 +76,10 @@ class UTCDateTime(TypeDecorator):
 RUN_STATUSES = ('pending', 'running', 'completed', 'failed')
 TRADE_SIDES = ('buy', 'sell')
 TRADE_STATUSES = ('open', 'closed')
+# Data provenance (migration 0004); data_sources/sources.py writes these
+DATA_SOURCES = ('synthetic', 'market-data')
+REPORTED_SOURCES = ('synthetic', 'alpaca', 'mixed')
+PRICE_ADJUSTMENTS = ('split', 'raw')
 
 
 def _in(column: str, values) -> str:
@@ -116,6 +120,12 @@ class BacktestRun(Base):
     __tablename__ = 'backtest_runs'
     __table_args__ = (
         CheckConstraint(_in('status', RUN_STATUSES), name='ck_backtest_runs_status'),
+        CheckConstraint(_in('data_source', DATA_SOURCES), name='ck_backtest_runs_data_source'),
+        CheckConstraint(_in('reported_source', REPORTED_SOURCES), name='ck_backtest_runs_reported_source'),
+        CheckConstraint(_in('price_adjustment', PRICE_ADJUSTMENTS), name='ck_backtest_runs_price_adjustment'),
+        # The local generator can't produce anything but synthetic bars
+        CheckConstraint("data_source = 'market-data' OR reported_source = 'synthetic'",
+                        name='ck_backtest_runs_local_is_synthetic'),
         Index('idx_backtest_runs_strategy', 'strategy_id'),
         Index('idx_backtest_runs_dates', 'start_date', 'end_date'),
     )
@@ -136,6 +146,14 @@ class BacktestRun(Base):
     # Same inputs with the risk layer off, when the run was made with a baseline
     baseline_run_id = Column(Integer, ForeignKey('backtest_runs.id', ondelete='SET NULL',
                                                  name='fk_backtest_runs_baseline_run_id'))
+    # Where the bars came from: the local synthetic generator or the
+    # market-data service, and the source the service reported (alpaca,
+    # synthetic, or mixed across symbols). The defaults label a row synthetic
+    # if a writer ever leaves them out, never real.
+    data_source = Column(String(20), nullable=False, default='synthetic', server_default='synthetic')
+    reported_source = Column(String(20), nullable=False, default='synthetic', server_default='synthetic')
+    symbol_sources = Column(JSONB)                # market-data: {"AAPL": "alpaca", ...}
+    price_adjustment = Column(String(10))         # market-data: split or raw
 
     strategy = relationship('Strategy', back_populates='backtest_runs')
     risk_config = relationship('RiskConfig', back_populates='backtest_runs')

@@ -44,9 +44,10 @@ def main() -> int:
     for strategy in config.strategies:
         for profile in load_risk_profiles(config.risk_profiles):
             with contextlib.redirect_stdout(io.StringIO()):
+                # The benchmark runs are on the synthetic file, whatever the default source
                 stored, results = BacktestService().run_backtest_with_results(
                     strategy, profile.name, config.start_date, config.end_date,
-                    config.initial_capital, list(config.symbols))
+                    config.initial_capital, list(config.symbols), data_source='synthetic')
             with engine.connect() as conn:
                 c = compare_with_python(conn, stored['backtest_id'], results['equity_curve'],
                                         config.initial_capital)

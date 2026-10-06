@@ -2,11 +2,18 @@
 # Local targets use $(PYTHON); create a virtualenv first (see README).
 
 PYTHON ?= python3
-# Throwaway PostgreSQL for `make test-pg`
+# Throwaway PostgreSQL for `make test-pg` and `make sql-check`
 PG_TEST_CONTAINER ?= quant-test-postgres
 PG_TEST_PORT ?= 55432
+PG_TEST_URL = postgresql://quant:quant@127.0.0.1:$(PG_TEST_PORT)/postgres
+# pg_isready over TCP: during first-start initdb the image runs a temporary
+# server on the Unix socket only, so a socket check can pass too early
+PG_START = docker run -d --rm --name $(PG_TEST_CONTAINER) -e POSTGRES_USER=quant -e POSTGRES_PASSWORD=quant \
+	-p 127.0.0.1:$(PG_TEST_PORT):5432 postgres:15-alpine >/dev/null && \
+	until docker exec $(PG_TEST_CONTAINER) pg_isready -h 127.0.0.1 -U quant -q; do sleep 1; done
+PG_STOP = docker stop $(PG_TEST_CONTAINER) >/dev/null
 
-.PHONY: help run down logs install install-live dev migrate test test-pg data results bench clean db-shell
+.PHONY: help run down logs install install-live dev migrate test test-pg sql-check data results bench clean db-shell
 
 help:
 	@echo "make run           Start PostgreSQL + the app in Docker (http://localhost:8000)"
@@ -18,6 +25,7 @@ help:
 	@echo "make migrate       alembic upgrade head on DATABASE_URL (default sqlite:///quant.db)"
 	@echo "make test          Run the test suite (PostgreSQL tests skip)"
 	@echo "make test-pg       Run the test suite with a throwaway PostgreSQL 15 container"
+	@echo "make sql-check     Compare the SQL window-function metrics with Python on the benchmark runs"
 	@echo "make data          Regenerate data/sample_data.csv (synthetic, seed 42)"
 	@echo "make results       Run the benchmark backtests and write docs/results.md"
 	@echo "make bench         Time backtests and write docs/benchmark.md"
@@ -49,14 +57,14 @@ migrate:
 test:
 	$(PYTHON) -m pytest
 
-# pg_isready over TCP: during first-start initdb the image runs a temporary
-# server on the Unix socket only, so a socket check can pass too early
 test-pg:
-	docker run -d --rm --name $(PG_TEST_CONTAINER) -e POSTGRES_USER=quant -e POSTGRES_PASSWORD=quant \
-		-p 127.0.0.1:$(PG_TEST_PORT):5432 postgres:15-alpine >/dev/null
-	@until docker exec $(PG_TEST_CONTAINER) pg_isready -h 127.0.0.1 -U quant -q; do sleep 1; done
-	QUANT_TEST_POSTGRES_URL=postgresql://quant:quant@127.0.0.1:$(PG_TEST_PORT)/postgres QUANT_REQUIRE_POSTGRES=1 \
-		$(PYTHON) -m pytest; status=$$?; docker stop $(PG_TEST_CONTAINER) >/dev/null; exit $$status
+	@$(PG_START)
+	QUANT_TEST_POSTGRES_URL=$(PG_TEST_URL) QUANT_REQUIRE_POSTGRES=1 $(PYTHON) -m pytest; \
+		status=$$?; $(PG_STOP); exit $$status
+
+sql-check:
+	@$(PG_START)
+	DATABASE_URL=$(PG_TEST_URL) $(PYTHON) -m scripts.sql_check; status=$$?; $(PG_STOP); exit $$status
 
 data:
 	$(PYTHON) -m backtest_engine.data_loader

@@ -69,7 +69,7 @@ make run          # docker compose up --build: PostgreSQL 15 + the app
 
 I checked this from a clean clone. It needs only Docker: the image build compiles the frontend in a Node 24 stage, and Flask serves it with the API. The sample data is committed. On start, `init_db.py` brings the schema to the latest migration (`alembic upgrade head`) and seeds the strategies and risk profiles from `config/`.
 
-Without Docker (Python 3.10 or 3.11 and Node 24, SQLite):
+Without Docker (Python 3.11 or 3.12 and Node 24, SQLite):
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -165,7 +165,7 @@ There are 430 pytest tests (`pytest --collect-only -q`) and 32 frontend tests (v
 - public-deploy protection: the CORS allow-list, 429s with `Retry-After` per client address and per endpoint group, the client-address header, the API key (lifts the limits, a wrong key is a 401), each request cap, the time limit (504, run stored as failed), the run slot (503), problem bodies for Flask's own errors, and the settings' validation
 - the deploy files: gunicorn's bind and process model, the Render blueprint, and `/health` answering without the database
 
-81 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.10 and 3.11 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. A separate job type-checks, tests (vitest: formatting, drawdown maths, the API client and its problem and 429 messages, the form and the server's caps, the comparison table and run history with undefined metrics, the data-source banner, the whole page against a mocked API) and builds the frontend on Node 24. No test needs a running market-data service. mypy runs on the engine as an advisory step and does not fail the build.
+81 tests need PostgreSQL and are skipped by `make test`; `make test-pg` runs the whole suite against a throwaway `postgres:15-alpine` container. Without `requirements-live.txt` installed (`make install-live`), the three tests that build real alpaca-py objects are also skipped. GitHub Actions installs it, runs the suite on Python 3.11 and 3.12 with a PostgreSQL 15 service container (the PostgreSQL tests fail rather than skip if it is missing), and checks that `docs/results.md` is current. A separate job type-checks, tests (vitest: formatting, drawdown maths, the API client and its problem and 429 messages, the form and the server's caps, the comparison table and run history with undefined metrics, the data-source banner, the whole page against a mocked API) and builds the frontend on Node 24. No test needs a running market-data service. mypy runs on the engine as an advisory step and does not fail the build.
 
 ## Limitations
 

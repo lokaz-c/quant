@@ -185,8 +185,8 @@ class ScriptedStrategy(StrategyBase):
         self.calls += 1
         return [Order(o.symbol, o.quantity, o.side) for o in self.orders]
 
-    def on_bar(self, bar, portfolio):
-        return []
+    def signal(self, symbol, bar, portfolio):
+        return None   # unused: generate_signals is overridden
 
 
 def held(symbol, qty, entry, current):

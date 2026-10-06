@@ -4,9 +4,8 @@ Generates buy signals when fast MA crosses above slow MA
 Generates sell signals when fast MA crosses below slow MA
 """
 import pandas as pd
-import numpy as np
-from typing import List, Dict, Any
-from ..strategy_base import StrategyBase
+from typing import Any, Dict, Optional
+from ..strategy_base import BARS_SEEN, StrategyBase
 from ..portfolio import Portfolio, Order
 
 
@@ -25,7 +24,7 @@ class MovingAverageCrossover(StrategyBase):
         if parameters['fast_period'] >= parameters['slow_period']:
             raise ValueError('fast_period must be less than slow_period')
 
-    def __init__(self, parameters: Dict[str, Any] = None):
+    def __init__(self, parameters: Optional[Dict[str, Any]] = None):
         default_params = {
             'fast_period': 20,
             'slow_period': 50
@@ -36,63 +35,52 @@ class MovingAverageCrossover(StrategyBase):
         self.fast_period = params['fast_period']
         self.slow_period = params['slow_period']
 
-        # Track historical data for MA calculation
-        self.data_buffer = {}
+    def indicators(self, bars: pd.DataFrame) -> pd.DataFrame:
+        """Both moving averages, and their values one bar earlier (for the crossover)"""
+        fast_ma = bars['close'].rolling(window=self.fast_period).mean()
+        slow_ma = bars['close'].rolling(window=self.slow_period).mean()
+        return pd.DataFrame({
+            'fast_ma': fast_ma,
+            'slow_ma': slow_ma,
+            'prev_fast_ma': fast_ma.shift(1),
+            'prev_slow_ma': slow_ma.shift(1),
+        }, index=bars.index)
 
-    def generate_signals(self, data: pd.DataFrame, portfolio: Portfolio) -> List[Order]:
-        """Generate signals based on MA crossover"""
-        orders = []
+    def signal(self, symbol: str, bar: Dict[str, Any], portfolio: Portfolio) -> Optional[Order]:
+        """Buy on a cross up while flat, sell the position on a cross down"""
+        if bar[BARS_SEEN] < self.slow_period:
+            return None
+        if pd.isna(bar['fast_ma']) or pd.isna(bar['slow_ma']):
+            return None
 
-        # Group by symbol
-        for symbol in data['symbol'].unique():
-            symbol_data = data[data['symbol'] == symbol].copy()
+        current_price = bar['close']
+        has_position = symbol in portfolio.positions
 
-            if len(symbol_data) < self.slow_period:
-                continue
+        # Buy signal: fast MA crosses above slow MA
+        if (bar['fast_ma'] > bar['slow_ma'] and
+            bar['prev_fast_ma'] <= bar['prev_slow_ma'] and
+            not has_position):
 
-            # Calculate moving averages
-            symbol_data['fast_ma'] = symbol_data['close'].rolling(window=self.fast_period).mean()
-            symbol_data['slow_ma'] = symbol_data['close'].rolling(window=self.slow_period).mean()
-
-            # Get latest values
-            latest = symbol_data.iloc[-1]
-            prev = symbol_data.iloc[-2] if len(symbol_data) > 1 else None
-
-            if prev is None or pd.isna(latest['fast_ma']) or pd.isna(latest['slow_ma']):
-                continue
-
-            current_price = latest['close']
-            has_position = symbol in portfolio.positions
-
-            # Buy signal: fast MA crosses above slow MA
-            if (latest['fast_ma'] > latest['slow_ma'] and
-                prev['fast_ma'] <= prev['slow_ma'] and
-                not has_position):
-
-                quantity = self.calculate_position_size(symbol, current_price, portfolio)
-                if quantity > 0:
-                    orders.append(Order(
-                        symbol=symbol,
-                        quantity=quantity,
-                        side='buy',
-                        timestamp=latest['timestamp']
-                    ))
-
-            # Sell signal: fast MA crosses below slow MA
-            elif (latest['fast_ma'] < latest['slow_ma'] and
-                  prev['fast_ma'] >= prev['slow_ma'] and
-                  has_position):
-
-                position = portfolio.positions[symbol]
-                orders.append(Order(
+            quantity = self.calculate_position_size(symbol, current_price, portfolio)
+            if quantity > 0:
+                return Order(
                     symbol=symbol,
-                    quantity=position.quantity,
-                    side='sell',
-                    timestamp=latest['timestamp']
-                ))
+                    quantity=quantity,
+                    side='buy',
+                    timestamp=bar['timestamp']
+                )
 
-        return orders
+        # Sell signal: fast MA crosses below slow MA
+        elif (bar['fast_ma'] < bar['slow_ma'] and
+              bar['prev_fast_ma'] >= bar['prev_slow_ma'] and
+              has_position):
 
-    def on_bar(self, bar: pd.Series, portfolio: Portfolio) -> List[Order]:
-        """Process single bar - not used in batch mode"""
-        return []
+            position = portfolio.positions[symbol]
+            return Order(
+                symbol=symbol,
+                quantity=position.quantity,
+                side='sell',
+                timestamp=bar['timestamp']
+            )
+
+        return None

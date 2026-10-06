@@ -31,7 +31,7 @@ flowchart LR
     csv --> switch{"data source<br/>QUANT_DATA_SOURCE"}
     cache --> switch
     switch -- "bars + provenance" --> loader["DataLoader"]
-    loader --> engine["Backtester<br/>bar-by-bar loop"]
+    loader --> engine["Backtester<br/>indicators once per symbol,<br/>then bar by bar"]
     strategies["Strategies<br/>MA crossover, RSI, breakout"] --> engine
     risk["RiskManager<br/>caps, stops, drawdown halt"] --> engine
     engine --> portfolio["Portfolio<br/>fills at the close"]
@@ -49,11 +49,11 @@ flowchart LR
     trader --> broker["AlpacaBroker<br/>paper by default"]
 ```
 
-On each bar the engine:
+Before the first bar, the strategy computes its indicators for each symbol over the whole run with vectorised pandas; the value at a bar depends only on that bar and earlier ones. Then, on each bar, the engine:
 
 1. marks positions to the close;
 2. if the risk layer is on, applies stop-loss and take-profit and checks drawdown;
-3. asks the strategy for orders;
+3. asks the strategy for an order for each symbol, from that bar's precomputed indicators;
 4. passes them through the risk rules;
 5. fills them at that bar's close.
 
@@ -83,7 +83,7 @@ For frontend work, run `make frontend-dev` next to `make dev`. It serves the app
 
 To run on bars from the market-data service, set `MARKET_DATA_URL` (and `MARKET_DATA_API_KEY` for Alpaca symbols); the other settings are in `.env.example` and [docs/market-data.md](docs/market-data.md). `make run-market-data` starts quant next to a local market-data stack built from `../market-data`. That stack has no Alpaca keys, so it serves only synthetic symbols (S001-S050), and the app labels every run on it synthetic.
 
-`make help` lists the other targets: `frontend`, `migrate`, `test-pg`, `sql-check`, `data`, `results`, `results-real`, `bench`, `deploy-check`, `down`, `db-shell`.
+`make help` lists the other targets: `frontend`, `migrate`, `test-pg`, `sql-check`, `data`, `results`, `results-real`, `bench`, `profile`, `deploy-check`, `down`, `db-shell`.
 
 ## Results
 
@@ -104,22 +104,26 @@ On this one simulated path, the Conservative profile gave a shallower max drawdo
 
 ## Performance
 
-`make bench` times `Backtester.run()` (CSV load, simulation, metrics) and writes [docs/benchmark.md](docs/benchmark.md) with the machine details. The median of 5 runs on an Apple M1 Pro (8 cores, 16 GiB, macOS 26.4, Python 3.11.15):
+`make bench` times `Backtester.run()` (CSV parse, indicators, simulation, metrics) and writes [docs/benchmark.md](docs/benchmark.md) with the machine details. Medians of 5 runs on an Apple M1 Pro (8 cores, 16 GiB, macOS 26.4, Python 3.11.15), before and after the engine started computing indicators once per run:
 
-| Case | Bars (days) | Rows (bars x symbols) | Median |
-| --- | ---: | ---: | ---: |
-| 5 symbols, 1 year | 262 | 1,310 | 0.49 s |
-| 5 symbols, 5 years | 1,305 | 6,525 | 3.46 s |
-| 25 symbols, 5 years (full sample file) | 1,305 | 32,625 | 26.72 s |
+| Case | Rows (bars x symbols) | Before (`1f4a047`) | After | Speed-up |
+| --- | ---: | ---: | ---: | ---: |
+| 5 symbols, 1 year | 1,310 | 0.47 s | 0.027 s | 17x |
+| 5 symbols, 5 years | 6,525 | 3.30 s | 0.041 s | 81x |
+| 25 symbols, 5 years (full sample file) | 32,625 | 25.82 s | 0.118 s | 218x |
 
-The machine was busy with other work during this run; its load average is recorded in the benchmark file. Time per bar grows with the amount of data because the engine recomputes indicators over the full history on every bar (see Limitations).
+Both columns come from `make bench` on the same machine on the same evening, with 1-minute load averages of 3.8 (before) and 2.6 (after). The figures published for `1f4a047`, measured at a load average of 15.0, were 0.49 s, 3.46 s and 26.72 s.
+
+`make profile` runs the largest case under cProfile, and `make profile PROFILE_ARGS=--lines` adds line timings. Before the change, 97% of the run was the strategy call on each bar. Over half of the total was one line, the per-bar `data[data['symbol'] == symbol].copy()` that picked each symbol's rows out of the history so far, and recomputing the two rolling means was about 30%. The loop also filtered the whole frame by date on every bar, so work per bar grew with the history. Now `StrategyBase.prepare` computes each symbol's indicators once, and the loop reads one precomputed row per symbol per bar from plain arrays. `DataLoader` also keeps the parsed CSV between runs, since parsing it was about half of a short run (`make bench` still times the parse). The results did not change: `docs/results.md` regenerates byte for byte, and tests check the precomputed indicators and whole backtests against the old per-bar computation (see [Tests and CI](#tests-and-ci)). The effect at Render's free size is under [Deploying](#deploying).
 
 ## What's in it
 
-- **Strategies** (`backtest_engine/strategies/`), each a `StrategyBase` subclass implementing `generate_signals(data, portfolio) -> List[Order]`:
+- **Strategies** (`backtest_engine/strategies/`):
   - Moving Average Crossover: 20/50-day; long on a cross up, flat on a cross down.
   - RSI Mean Reversion: 14-day RSI computed from simple averages; buy below 30, sell above 70.
   - Trend Following: buy when the close breaks the previous 20-day high; exit below the previous 20-day low or below a chandelier stop (20-day high minus 2 × ATR(14)).
+
+  Each is a `StrategyBase` subclass with two methods. `indicators(bars)` returns its indicator columns for one symbol's bars, computed once per run with vectorised pandas; the value at a bar may use only that bar and earlier ones. `signal(symbol, bar, portfolio)` returns an `Order` or `None` for one symbol at one bar, from that bar's prices and indicators. `generate_signals(data, portfolio)` gives the same decision for the latest bar of a history; paper trading uses it.
 - **Risk layer** (`backtest_engine/risk.py`): max position size and max exposure (oversized orders are cut down, not rejected), stop-loss, take-profit, and a max-drawdown halt that blocks new entries. There are four profiles in `config/risk_configs.json`, one of them with the risk layer off.
 - **Metrics** (`backtest_engine/metrics.py`):
   - returns and risk: total return, CAGR, max drawdown, annualised volatility, Sharpe (2% risk-free)
@@ -143,11 +147,12 @@ The machine was busy with other work during this run; its load average is record
 
 ## Tests and CI
 
-There are 400 pytest tests (`pytest --collect-only -q`) and 32 frontend tests (vitest). The pytest tests cover:
+There are 430 pytest tests (`pytest --collect-only -q`) and 32 frontend tests (vitest). The pytest tests cover:
 
 - the data generator: cross-process determinism under different `PYTHONHASHSEED` values, and that the committed CSV matches the generator
 - the Markov chain: empirical transition frequencies and mean regime durations against the matrix
 - strategy signals, metrics, portfolio accounting and risk rules
+- precomputed indicators: equal bit for bit to the old per-bar computation for each strategy; whole backtests identical to the old per-bar loop, with and without the risk layer and with missing bars; changing future bars changes nothing before them, and the same check catches a strategy that looks ahead; the parsed-CSV cache
 - the Flask API, on temporary SQLite and on PostgreSQL: parameter overrides, baseline pairs, input validation (400s with the reason), and serving the built frontend
 - the SQL cross-check: `sql/metrics.sql` against the Python metrics on six stored runs, a known-answer drawdown case and a flat curve
 - the Alembic migrations, on SQLite and PostgreSQL: upgrade to head and downgrade to base, the models matching the head revision, the CHECK constraints and unique index rejecting bad rows, adopting a database created before Alembic, and existing rows surviving the type changes
@@ -170,7 +175,7 @@ There are 400 pytest tests (`pytest --collect-only -q`) and 32 frontend tests (v
 - **Optimistic fills.** Orders fill at the close of the bar that produced the signal, which assumes you can trade at a price only known at the close. There are no commissions, slippage, partial fills or shorting.
 - **Idle cash earns nothing**, while Sharpe subtracts a 2% risk-free rate.
 - **No cooldown after a stop-loss.** A strategy can re-enter on the same bar it was stopped out.
-- **Runtime grows with history.** Every bar re-filters the data and recomputes indicators over the full history (see the benchmark). A backtest runs inside the HTTP request (two with the baseline on) and is stopped after 90 s. On Render's free 0.1 CPU this is slow: the form's default request took about a minute in `make deploy-check` (see [Deploying](#deploying)). Computing indicators once per run instead of once per bar is the fix; it isn't done yet.
+- **Backtests run inside the HTTP request**, two with the baseline on, one at a time per process, and are stopped after 90 s. At Render's free size in `make deploy-check`, the form's default request took 1.7 to 3.7 s and the largest the caps allow 8.6 to 10.1 s (see [Deploying](#deploying)); Render's CPUs may be slower than that host. A second run request during a run gets a 503 with `Retry-After`.
 - **Rate limits are per process.** The counters are in memory, which is exact for the one gunicorn process on one instance that the image runs. More processes or instances need a shared store (`QUANT_RATE_LIMIT_STORAGE_URI`). There is no async run endpoint; see [docs/api.md](docs/api.md#limits-rate-limits-and-api-keys).
 - **Paper trading is only tested against fake clients.** It has not been run against a funded account.
 - **Risk profiles are hand-picked**, not fitted. mypy is advisory, not enforced.
@@ -213,16 +218,37 @@ The recommended free setup matches [market-data](https://github.com/lokaz-c/mark
    The blueprint fixes the rest: `plan: free`, `region: oregon`, `QUANT_DATA_SOURCE=synthetic`, `QUANT_CLIENT_IP_HEADER=CF-Connecting-IP` (Cloudflare overwrites that header on every request to Render, so rate limits see the real client address) and a generated `SECRET_KEY`. Render then builds the Dockerfile, and later deploys from `main` once CI passes (`autoDeployTrigger: checksPass`).
 4. **Check it.** Open `https://quant-portfolio-simulator.onrender.com` (the service name in `render.yaml`; Render shows the actual URL) and run a backtest. Then add the URL to this README, the repo's About section and TradeDesk's `QUANT_API_URL`.
 
-**What to expect on the free tier.** Render stops the service after 15 minutes without traffic and takes about a minute to start it again. The container then needs about half a minute more to migrate and start (31 s in the check below). Neon suspends the database after 5 minutes idle and starts it again on the next connection. The service is a single 0.1 CPU, 512 MB instance, and backtests are CPU-bound. `make deploy-check` builds the image and runs it with those limits (`--cpus 0.1 --memory 512m`, `PORT=10000`). On an M1 Pro under Docker Desktop it printed:
+**What to expect on the free tier.** Render stops the service after 15 minutes without traffic and takes about a minute to start it again. The container then needs about half a minute more to migrate and start (34 s in the check below). Neon suspends the database after 5 minutes idle and starts it again on the next connection. The service is a single 0.1 CPU, 512 MB instance, and backtests are CPU-bound. `make deploy-check` builds the image, runs it with those limits (`--cpus 0.1 --memory 512m`, `PORT=10000`) and times three requests: the form's default, TradeDesk's one-symbol request, and the largest run the caps allow. On an M1 Pro under Docker Desktop it printed:
 
 ```
-ready (migrations, seed, gunicorn) after 31 s
+ready (migrations, seed, gunicorn) after 34 s
 /: 200, the React app
 /api/data: synthetic, 25 symbols, limits {'max_symbols': 10, 'max_range_days': 1827, 'timeout_seconds': 90.0}
-default run (5 symbols, 2023, with baseline): HTTP 200 in 52.653925 s
-/health during the run: 25 of 25 checks answered 200, slowest 0.36 s
-memory after the run: 100.4MiB / 512MiB
+default run (5 symbols, 2023, with baseline): HTTP 200 in 3.676777 s
+  /health during the run: 2 of 2 checks answered 200, slowest 0.07 s
+1 symbol, 2020-2024, no baseline (TradeDesk's request): HTTP 200 in 3.912931 s
+  /health during the run: 2 of 2 checks answered 200, slowest 0.76 s
+largest allowed (10 symbols, 2020-2024, with baseline): HTTP 200 in 10.145814 s
+  /health during the run: 5 of 5 checks answered 200, slowest 0.35 s
+memory after the runs: 112.7MiB / 512MiB
 ```
+
+Timings at 0.1 CPU vary from run to run. Over three runs the default request took 1.7 to 3.7 s, TradeDesk's request 3.1 to 3.9 s and the largest 8.6 to 10.1 s. Before indicators were precomputed (commit `1f4a047`, the same script), it printed:
+
+```
+ready (migrations, seed, gunicorn) after 27 s
+/: 200, the React app
+/api/data: synthetic, 25 symbols, limits {'max_symbols': 10, 'max_range_days': 1827, 'timeout_seconds': 90.0}
+default run (5 symbols, 2023, with baseline): HTTP 200 in 58.277104 s
+  /health during the run: 27 of 27 checks answered 200, slowest 0.47 s
+1 symbol, 2020-2024, no baseline (TradeDesk's request): HTTP 200 in 22.611463 s
+  /health during the run: 11 of 11 checks answered 200, slowest 0.27 s
+largest allowed (10 symbols, 2020-2024, with baseline): HTTP 504 in 90.229686 s
+  /health during the run: 42 of 42 checks answered 200, slowest 0.35 s
+memory after the runs: 191.1MiB / 512MiB
+```
+
+A second run at that commit took 66.4 s and 49.2 s and again stopped the largest run at the 90 s limit; an earlier run of the default request alone took 53.9 s. Two numbers are worse after the change. Startup took 34 to 37 s in the three runs after it against 27 to 32 s in the three before; the change adds no work at startup that I could find. And the slowest `/health` answer during a run was up to 1.36 s, against at most 0.47 s before. Every poll still answered 200, and a short run gets only 1 to 5 polls (11 to 42 before), so one poll landing on a brief pause counts for more.
 
 Render's CPUs may be slower than this host. `docker compose` (`make run`) runs the same image and command against PostgreSQL 15; it serves the app at `/` and the API at `/api`.
 

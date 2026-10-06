@@ -10,7 +10,9 @@ names are labels only. Regenerate it with:
     python -m backtest_engine.data_loader
 """
 import argparse
+import os
 import zlib
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
 
@@ -34,6 +36,36 @@ _REGIME_STREAM = 0
 _SYMBOL_STREAM = 1
 
 
+def _read_bars(path) -> pd.DataFrame:
+    """
+    The CSV with parsed timestamps. A file on disk is parsed once per version
+    (path, modification time, size) and kept: the API reads the same sample
+    file for every run, and parsing it was about half of a 5-symbol, 1-year
+    run (`python -m scripts.profile_bench --case 0`). Callers get filtered or
+    sorted copies, never this frame.
+    """
+    if isinstance(path, (str, os.PathLike)) and os.path.isfile(path):
+        stat = os.stat(path)
+        return _read_bars_cached(os.path.abspath(path), stat.st_mtime_ns, stat.st_size)
+    return _parse_bars(path)
+
+
+def _parse_bars(path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    return df
+
+
+@lru_cache(maxsize=4)
+def _read_bars_cached(path: str, mtime_ns: int, size: int) -> pd.DataFrame:
+    return _parse_bars(path)
+
+
+def clear_csv_cache() -> None:
+    """Forget every parsed file (make bench times each run's CSV read, as it always has)"""
+    _read_bars_cached.cache_clear()
+
+
 class DataLoader:
     """Loads OHLCV bars from a CSV file (columns: timestamp, symbol, open, high, low, close, volume)"""
 
@@ -48,12 +80,9 @@ class DataLoader:
         Expected CSV columns: timestamp, symbol, open, high, low, close, volume.
         Extra columns (the sample data has a `regime` column) are kept.
         """
-        df = pd.read_csv(self.data_path)
+        df = _read_bars(self.data_path)
 
-        # Convert timestamp to datetime
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-
-        # Filter by symbols if provided
+        # Filter by symbols if provided (a new frame; the cached one is never returned)
         if symbols:
             df = df[df['symbol'].isin(symbols)]
 

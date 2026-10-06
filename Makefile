@@ -13,7 +13,7 @@ PG_START = docker run -d --rm --name $(PG_TEST_CONTAINER) -e POSTGRES_USER=quant
 	until docker exec $(PG_TEST_CONTAINER) pg_isready -h 127.0.0.1 -U quant -q; do sleep 1; done
 PG_STOP = docker stop $(PG_TEST_CONTAINER) >/dev/null
 
-.PHONY: help run run-market-data down logs install install-live dev frontend frontend-dev test-frontend migrate test test-pg sql-check data results results-real bench deploy-check clean db-shell
+.PHONY: help run run-market-data down logs install install-live dev frontend frontend-dev test-frontend migrate test test-pg sql-check data results results-real bench profile deploy-check clean db-shell
 
 help:
 	@echo "make run           Start PostgreSQL + the app in Docker (http://localhost:8000)"
@@ -34,6 +34,7 @@ help:
 	@echo "make results       Run the benchmark backtests and write docs/results.md (synthetic data)"
 	@echo "make results-real  The same benchmark on market-data bars -> docs/results-real.md (MARKET_DATA_URL)"
 	@echo "make bench         Time backtests and write docs/benchmark.md"
+	@echo "make profile       cProfile the largest benchmark case (PROFILE_ARGS=--lines adds line timings)"
 	@echo "make deploy-check  Run the Docker image at Render free-tier size (0.1 CPU, 512 MB) and time a run"
 	@echo "make db-shell      psql into the Docker database"
 	@echo "make clean         Remove caches and the local SQLite database"
@@ -104,6 +105,11 @@ results-real:
 
 bench:
 	$(PYTHON) -m scripts.bench
+
+# Where the time goes in the largest `make bench` case. PROFILE_ARGS=--lines adds
+# per-line timings (pip install line_profiler); see scripts/profile_bench.py
+profile:
+	$(PYTHON) -m scripts.profile_bench $(PROFILE_ARGS)
 
 # The image as Render's free instance would run it; see README "Deploying"
 deploy-check:

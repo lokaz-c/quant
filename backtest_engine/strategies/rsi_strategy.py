@@ -4,9 +4,8 @@ Buys when RSI is oversold
 Sells when RSI is overbought
 """
 import pandas as pd
-import numpy as np
-from typing import List, Dict, Any
-from ..strategy_base import StrategyBase
+from typing import Any, Dict, Optional
+from ..strategy_base import BARS_SEEN, StrategyBase
 from ..portfolio import Portfolio, Order
 
 
@@ -24,7 +23,7 @@ class RSIMeanReversion(StrategyBase):
         if parameters['oversold'] >= parameters['overbought']:
             raise ValueError('oversold must be less than overbought')
 
-    def __init__(self, parameters: Dict[str, Any] = None):
+    def __init__(self, parameters: Optional[Dict[str, Any]] = None):
         default_params = {
             'rsi_period': 14,
             'oversold': 30,
@@ -49,52 +48,40 @@ class RSIMeanReversion(StrategyBase):
 
         return rsi
 
-    def generate_signals(self, data: pd.DataFrame, portfolio: Portfolio) -> List[Order]:
-        """Generate signals based on RSI levels"""
-        orders = []
+    def indicators(self, bars: pd.DataFrame) -> pd.DataFrame:
+        """RSI from simple averages of gains and losses"""
+        return pd.DataFrame({'rsi': self.calculate_rsi(bars['close'], self.rsi_period)}, index=bars.index)
 
-        # Group by symbol
-        for symbol in data['symbol'].unique():
-            symbol_data = data[data['symbol'] == symbol].copy()
+    def signal(self, symbol: str, bar: Dict[str, Any], portfolio: Portfolio) -> Optional[Order]:
+        """Buy below the oversold level while flat, sell above the overbought level"""
+        # One more bar than the period: the first price change needs two closes
+        if bar[BARS_SEEN] < self.rsi_period + 1:
+            return None
+        if pd.isna(bar['rsi']):
+            return None
 
-            if len(symbol_data) < self.rsi_period + 1:
-                continue
+        current_price = bar['close']
+        has_position = symbol in portfolio.positions
 
-            # Calculate RSI
-            symbol_data['rsi'] = self.calculate_rsi(symbol_data['close'], self.rsi_period)
-
-            # Get latest values
-            latest = symbol_data.iloc[-1]
-
-            if pd.isna(latest['rsi']):
-                continue
-
-            current_price = latest['close']
-            has_position = symbol in portfolio.positions
-
-            # Buy signal: RSI oversold
-            if latest['rsi'] < self.oversold and not has_position:
-                quantity = self.calculate_position_size(symbol, current_price, portfolio)
-                if quantity > 0:
-                    orders.append(Order(
-                        symbol=symbol,
-                        quantity=quantity,
-                        side='buy',
-                        timestamp=latest['timestamp']
-                    ))
-
-            # Sell signal: RSI overbought
-            elif latest['rsi'] > self.overbought and has_position:
-                position = portfolio.positions[symbol]
-                orders.append(Order(
+        # Buy signal: RSI oversold
+        if bar['rsi'] < self.oversold and not has_position:
+            quantity = self.calculate_position_size(symbol, current_price, portfolio)
+            if quantity > 0:
+                return Order(
                     symbol=symbol,
-                    quantity=position.quantity,
-                    side='sell',
-                    timestamp=latest['timestamp']
-                ))
+                    quantity=quantity,
+                    side='buy',
+                    timestamp=bar['timestamp']
+                )
 
-        return orders
+        # Sell signal: RSI overbought
+        elif bar['rsi'] > self.overbought and has_position:
+            position = portfolio.positions[symbol]
+            return Order(
+                symbol=symbol,
+                quantity=position.quantity,
+                side='sell',
+                timestamp=bar['timestamp']
+            )
 
-    def on_bar(self, bar: pd.Series, portfolio: Portfolio) -> List[Order]:
-        """Process single bar - not used in batch mode"""
-        return []
+        return None

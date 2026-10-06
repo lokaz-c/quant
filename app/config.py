@@ -18,9 +18,11 @@ DEFAULT_MAX_RANGE_DAYS = 1827
 DEFAULT_MAX_SYMBOLS = 10
 DEFAULT_RUN_LIMIT = '5 per minute;30 per hour'
 DEFAULT_READ_LIMIT = '120 per minute'
-# The run form's default request (5 symbols over 2023 with its baseline) took about a minute in a
-# container limited to Render's free 0.1 CPU (`make deploy-check`); 90 s leaves headroom
+# The limit covers the whole request, including a market-data fetch. In a container limited to
+# Render's free 0.1 CPU (`make deploy-check`) the largest run the default caps allow took 8.6 to
+# 10.1 s; 90 s also covers a free market-data service waking up (about a minute)
 DEFAULT_TIMEOUT_SECONDS = 90.0
+# Runs are CPU-bound on 0.1 CPU: a second one at the same time would share the CPU, not finish sooner
 DEFAULT_MAX_CONCURRENT_RUNS = 1
 MAX_BODY_BYTES = 64 * 1024
 

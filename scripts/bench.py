@@ -1,9 +1,10 @@
 """
 Backtest timing benchmark -> docs/benchmark.md
 
-Times Backtester.run() (CSV load, the bar-by-bar loop and the metrics) for a
-few sizes of the synthetic sample data and writes the median of several runs,
-plus the machine it ran on.
+Times Backtester.run() (CSV load, the indicators, the bar-by-bar loop and the
+metrics) for a few sizes of the synthetic sample data and writes the median of
+several runs, plus the machine it ran on, next to the same cases timed before
+the engine precomputed indicators (BEFORE_RUNS).
 
     make bench          # or: python -m scripts.bench
 """
@@ -23,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from backtest_engine.backtester import Backtester
-from backtest_engine.data_loader import DEFAULT_SYMBOLS, DataLoader
+from backtest_engine.data_loader import DEFAULT_SYMBOLS, DataLoader, clear_csv_cache
 from backtest_engine.strategies.moving_average import MovingAverageCrossover
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -36,6 +37,26 @@ CASES: Sequence[Tuple[str, Sequence[str], str, str]] = (
     ('5 symbols, 1 year', FIVE, '2024-01-01', '2024-12-31'),
     ('5 symbols, 5 years', FIVE, '2020-01-01', '2024-12-31'),
     ('25 symbols, 5 years (full sample file)', tuple(DEFAULT_SYMBOLS), '2020-01-01', '2024-12-31'),
+)
+
+# The same cases timed by `make bench` at commit 1f4a047, when the engine
+# recomputed every indicator over the full history on every bar. Both runs were
+# on BEFORE_MACHINE; the first is the table this file had at that commit, the
+# second a re-run just before measuring the change, at a lower load.
+BEFORE_COMMIT = '1f4a047'
+BEFORE_MACHINE = 'Apple M1 Pro (8 cores)'
+# (when, load average at start (1 / 5 / 15 min), {case label: median seconds})
+BEFORE_RUNS: Sequence[Tuple[str, str, Dict[str, float]]] = (
+    ('2026-10-05, as published', '15.0 / 17.8 / 19.2', {
+        '5 symbols, 1 year': 0.49,
+        '5 symbols, 5 years': 3.46,
+        '25 symbols, 5 years (full sample file)': 26.72,
+    }),
+    ('2026-10-05, re-run', '3.8 / 4.1 / 4.7', {
+        '5 symbols, 1 year': 0.47,
+        '5 symbols, 5 years': 3.30,
+        '25 symbols, 5 years (full sample file)': 25.82,
+    }),
 )
 
 
@@ -71,6 +92,7 @@ def time_case(symbols: Sequence[str], start: str, end: str, repeats: int) -> Tup
     for _ in range(repeats):
         backtester = Backtester(MovingAverageCrossover(), DataLoader(str(DATA_PATH)), 100_000,
                                 start_date=start, end_date=end, symbols=list(symbols))
+        clear_csv_cache()   # every timing includes parsing the CSV, as before the cache existed
         began = time.perf_counter()
         with contextlib.redirect_stdout(io.StringIO()):
             results = backtester.run()
@@ -85,6 +107,11 @@ def load_average() -> str:
         return ' / '.join(f'{x:.1f}' for x in os.getloadavg())
     except (AttributeError, OSError):
         return 'unknown'
+
+
+def _seconds(value: float) -> str:
+    """Three decimals below a second, two above"""
+    return f'{value:.3f} s' if value < 1 else f'{value:.2f} s'
 
 
 def render(info: Dict[str, str], results: List[Tuple[str, List[float], int, int]], repeats: int) -> str:
@@ -103,7 +130,8 @@ def render(info: Dict[str, str], results: List[Tuple[str, List[float], int, int]
         '## Method',
         '',
         '- Strategy: Moving Average Crossover (20/50), risk layer off, on the synthetic `data/sample_data.csv`',
-        '- Each timing covers one `Backtester.run()`: reading the CSV, the bar-by-bar loop, and the metrics',
+        '- Each timing covers one `Backtester.run()`: reading the CSV, computing the indicators, '
+        'the bar-by-bar loop, and the metrics',
         f'- {repeats} runs per case, one after another in one process; the table shows the median, '
         'with the fastest and slowest run',
         '',
@@ -114,16 +142,44 @@ def render(info: Dict[str, str], results: List[Tuple[str, List[float], int, int]
     ]
     for label, timings, bars, rows in results:
         median = statistics.median(timings)
-        lines.append(f'| {label} | {bars:,} | {rows:,} | {median:.2f} s | {min(timings):.2f} s | '
-                     f'{max(timings):.2f} s | {median / bars * 1000:.2f} ms |')
+        lines.append(f'| {label} | {bars:,} | {rows:,} | {_seconds(median)} | {_seconds(min(timings))} | '
+                     f'{_seconds(max(timings))} | {median / bars * 1000:.3f} ms |')
     lines += [
         '',
-        'Why time per bar is not constant: on every bar the engine filters the loaded rows up to that '
-        'date, and the strategy recomputes each symbol\'s indicators over that symbol\'s full history. '
-        'More symbols or a longer history means more work per bar. Computing indicators once per '
-        'symbol up front would avoid most of that repeated work.',
+        'The engine computes each symbol\'s indicators once per run, vectorised, before the bar loop '
+        '(`StrategyBase.prepare`); the loop then reads one precomputed row per symbol per bar. '
+        'The smallest case has the highest time per bar because each timed run parses the whole '
+        '32,625-row file before filtering it, a fixed cost that was about half of that case under '
+        '`python -m scripts.profile_bench --case 0`. `make profile` shows where the time goes.',
     ]
+    lines += render_comparison(info, results)
     return '\n'.join(lines) + '\n'
+
+
+def render_comparison(info: Dict[str, str], results: List[Tuple[str, List[float], int, int]]) -> List[str]:
+    """This run's medians next to BEFORE_RUNS, the same cases at BEFORE_COMMIT"""
+    (first_when, first_load, _), (second_when, second_load, rerun) = BEFORE_RUNS
+    lines = [
+        '',
+        '## Before and after',
+        '',
+        f'Before: commit `{BEFORE_COMMIT}`, which recomputed every indicator over the full history on every '
+        f'bar, timed by `{COMMAND}` on the {BEFORE_MACHINE}: {first_when} (load average {first_load}) and '
+        f'{second_when} (load average {second_load}). The speed-up compares this run with the re-run.',
+        '',
+        f'| Case | Before, {first_when} | Before, {second_when} | This run | Speed-up |',
+        '| --- | ---: | ---: | ---: | ---: |',
+    ]
+    for label, timings, _, _ in results:
+        median = statistics.median(timings)
+        cells = [f'{runs[label]:.2f} s' if label in runs else '-' for _, _, runs in BEFORE_RUNS]
+        ratio = rerun[label] / median if label in rerun and median > 0 else None
+        speedup = '-' if ratio is None else f'{ratio:.1f}x' if ratio < 10 else f'{ratio:.0f}x'
+        lines.append(f'| {label} | {cells[0]} | {cells[1]} | {_seconds(median)} | {speedup} |')
+    if info['CPU'] != BEFORE_MACHINE:
+        lines += ['', f'This run was on a different machine ({info["CPU"]}), so the speed-up column '
+                      'compares two machines.']
+    return lines
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -138,7 +194,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     results = []
     for label, symbols, start, end in CASES:
         timings, bars, rows = time_case(symbols, start, end, args.repeats)
-        print(f'{label}: median {statistics.median(timings):.2f} s over {args.repeats} runs')
+        print(f'{label}: median {_seconds(statistics.median(timings))} over {args.repeats} runs')
         results.append((label, timings, bars, rows))
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)

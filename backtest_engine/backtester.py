@@ -75,17 +75,35 @@ class Backtester:
         print(f"Risk Config: {self.risk_config.name}")
         print(f"Date Range: {self.data['timestamp'].min()} to {self.data['timestamp'].max()}")
 
-        # Group data by timestamp for bar-by-bar processing
-        grouped = self.data.groupby('timestamp')
+        # Indicators once per symbol over the whole run, before the loop. Each
+        # value at bar t depends only on bars up to t (StrategyBase.indicators),
+        # so this gives the same signals as recomputing them on every bar.
+        prepared = self.strategy.prepare(self.data)
+
+        # The bar loop works on plain lists: no DataFrame filtering per bar.
+        # Rows are grouped by timestamp, in time order, keeping the data's
+        # row order within a bar (groupby('timestamp') did the same).
+        symbols = self.data['symbol'].tolist()
+        closes = self.data['close'].tolist()
+        row_in_symbol = self.data.groupby('symbol', sort=False, dropna=False).cumcount().tolist()
+        codes, timestamps = pd.factorize(self.data['timestamp'], sort=True)
+        rows_by_bar: List[List[int]] = [[] for _ in range(len(timestamps))]
+        for row, code in enumerate(codes.tolist()):
+            if code >= 0:   # -1: a missing timestamp, never a bar
+                rows_by_bar[code].append(row)
 
         bar_count = 0
-        for timestamp, bar_data in grouped:
+        for timestamp, rows in zip(timestamps, rows_by_bar):
             if self.deadline is not None and time.monotonic() > self.deadline:
-                raise BacktestTimeout(f'stopped after {bar_count} of {grouped.ngroups} bars')
+                raise BacktestTimeout(f'stopped after {bar_count} of {len(timestamps)} bars')
             bar_count += 1
 
-            # Update current prices
-            current_prices = dict(zip(bar_data['symbol'], bar_data['close']))
+            # Update current prices; each symbol's row in this bar
+            current_prices = {}
+            latest = {}
+            for row in rows:
+                current_prices[symbols[row]] = closes[row]
+                latest[symbols[row]] = row
             self.portfolio.update_prices(current_prices)
 
             # Check risk conditions (stop loss, take profit, drawdown)
@@ -105,10 +123,16 @@ class Backtester:
                 # Check drawdown
                 self.risk_manager.check_drawdown(self.portfolio)
 
-            # Generate strategy signals
-            # Get historical data up to current point
-            historical_data = self.data[self.data['timestamp'] <= timestamp]
-            strategy_orders = self.strategy.generate_signals(historical_data, self.portfolio)
+            # Generate strategy signals for each symbol with a bar now, from
+            # its precomputed row
+            strategy_orders = []
+            for symbol, row in latest.items():
+                symbol_bars = prepared.get(symbol)
+                if symbol_bars is None:
+                    continue
+                order = self.strategy.signal(symbol, symbol_bars.bar(row_in_symbol[row]), self.portfolio)
+                if order is not None:
+                    strategy_orders.append(order)
 
             # Apply risk management to strategy orders
             if self.risk_manager.config.enabled:

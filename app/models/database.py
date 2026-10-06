@@ -1,5 +1,9 @@
 """
-Database models and ORM setup using SQLAlchemy
+Database models and ORM setup using SQLAlchemy.
+
+The schema is owned by the Alembic migrations in migrations/. Create or
+upgrade a database with `alembic upgrade head`, or `python init_db.py`,
+which also seeds it.
 """
 import os
 from datetime import datetime
@@ -134,13 +138,3 @@ def get_db():
         raise
     finally:
         db.close()
-
-
-def init_db():
-    """Initialize database tables"""
-    Base.metadata.create_all(bind=engine)
-
-
-if __name__ == '__main__':
-    init_db()
-    print("Database initialized successfully")

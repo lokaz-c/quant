@@ -2,8 +2,8 @@
 Backtest API routes
 """
 from flask import Blueprint, request, jsonify
-from datetime import datetime
-from app.services.backtest_service import BacktestService
+from app.routes.errors import server_error
+from app.services.backtest_service import BacktestService, InvalidRequest
 
 bp = Blueprint('backtest', __name__, url_prefix='/api/backtest')
 
@@ -20,14 +20,18 @@ def run_backtest():
         "start_date": "2022-01-01",
         "end_date": "2023-12-31",
         "initial_capital": 100000,
-        "symbols": ["AAPL", "GOOGL"]
+        "symbols": ["AAPL", "GOOGL"],
+        "parameters": {"fast_period": 10},      # optional overrides
+        "compare_to_baseline": true             # optional
     }
 
     The prices come from the synthetic sample dataset; the response's `data`
-    field says so.
+    field says so. Invalid input is a 400 with the reason.
     """
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Expected a JSON object'}), 400
 
         # Validate required fields
         required = ['strategy_name', 'start_date', 'end_date', 'initial_capital']
@@ -43,13 +47,17 @@ def run_backtest():
             end_date=data['end_date'],
             initial_capital=data['initial_capital'],
             symbols=data.get('symbols'),
-            market_regime=data.get('market_regime')
+            market_regime=data.get('market_regime'),
+            parameters=data.get('parameters'),
+            compare_to_baseline=bool(data.get('compare_to_baseline', False))
         )
 
         return jsonify(result), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except InvalidRequest as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception:
+        return server_error()
 
 
 @bp.route('/<int:backtest_id>', methods=['GET'])
@@ -64,8 +72,8 @@ def get_backtest(backtest_id):
 
         return jsonify(result), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except Exception:
+        return server_error()
 
 
 @bp.route('/list', methods=['GET'])
@@ -80,8 +88,8 @@ def list_backtests():
 
         return jsonify(results), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except Exception:
+        return server_error()
 
 
 @bp.route('/compare', methods=['POST'])
@@ -109,8 +117,10 @@ def compare_backtests():
 
         return jsonify(result), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception:
+        return server_error()
 
 
 @bp.route('/regime-analysis', methods=['POST'])
@@ -147,5 +157,7 @@ def regime_analysis():
 
         return jsonify(result), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except InvalidRequest as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception:
+        return server_error()

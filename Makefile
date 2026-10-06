@@ -13,7 +13,7 @@ PG_START = docker run -d --rm --name $(PG_TEST_CONTAINER) -e POSTGRES_USER=quant
 	until docker exec $(PG_TEST_CONTAINER) pg_isready -h 127.0.0.1 -U quant -q; do sleep 1; done
 PG_STOP = docker stop $(PG_TEST_CONTAINER) >/dev/null
 
-.PHONY: help run down logs install install-live dev migrate test test-pg sql-check data results bench clean db-shell
+.PHONY: help run down logs install install-live dev frontend frontend-dev test-frontend migrate test test-pg sql-check data results bench clean db-shell
 
 help:
 	@echo "make run           Start PostgreSQL + the app in Docker (http://localhost:8000)"
@@ -21,7 +21,10 @@ help:
 	@echo "make logs          Follow the app container's logs"
 	@echo "make install       pip install -r requirements.txt"
 	@echo "make install-live  pip install -r requirements-live.txt (adds alpaca-py)"
-	@echo "make dev           Run the app locally on SQLite (http://localhost:8000)"
+	@echo "make dev           Build the frontend, run the app locally on SQLite (http://localhost:8000)"
+	@echo "make frontend      npm ci (when the lockfile changes) and build frontend/dist (needs Node 24)"
+	@echo "make frontend-dev  Vite dev server with hot reload (http://localhost:5173); run make dev too"
+	@echo "make test-frontend Type-check and test the frontend (vitest)"
 	@echo "make migrate       alembic upgrade head on DATABASE_URL (default sqlite:///quant.db)"
 	@echo "make test          Run the test suite (PostgreSQL tests skip)"
 	@echo "make test-pg       Run the test suite with a throwaway PostgreSQL 15 container"
@@ -47,9 +50,22 @@ install:
 install-live:
 	$(PYTHON) -m pip install -r requirements-live.txt
 
-dev:
+dev: frontend
 	$(PYTHON) init_db.py
 	$(PYTHON) -m app.main
+
+frontend/node_modules: frontend/package-lock.json
+	cd frontend && npm ci
+	touch frontend/node_modules
+
+frontend: frontend/node_modules
+	cd frontend && npm run build
+
+frontend-dev: frontend/node_modules
+	cd frontend && npm run dev
+
+test-frontend: frontend/node_modules
+	cd frontend && npm run typecheck && npm test
 
 migrate:
 	$(PYTHON) -m alembic upgrade head
@@ -79,5 +95,5 @@ db-shell:
 	docker compose exec db psql -U quant_user -d quant_db
 
 clean:
-	rm -rf .pytest_cache htmlcov .coverage quant.db
+	rm -rf .pytest_cache htmlcov .coverage quant.db frontend/dist
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

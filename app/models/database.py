@@ -131,6 +131,11 @@ class BacktestRun(Base):
     status = Column(String(50), default='pending', server_default='pending')
     created_at = Column(UTCDateTime, default=utcnow, server_default=NOW)
     completed_at = Column(UTCDateTime)
+    # The parameters this run used (stored defaults merged with overrides)
+    strategy_parameters = Column(JSONB)
+    # Same inputs with the risk layer off, when the run was made with a baseline
+    baseline_run_id = Column(Integer, ForeignKey('backtest_runs.id', ondelete='SET NULL',
+                                                 name='fk_backtest_runs_baseline_run_id'))
 
     strategy = relationship('Strategy', back_populates='backtest_runs')
     risk_config = relationship('RiskConfig', back_populates='backtest_runs')

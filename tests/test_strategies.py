@@ -96,3 +96,15 @@ def test_every_strategy_trades_on_generated_data(strategy_cls, tmp_path):
     # Everything is closed on the last bar, so equity is all cash
     assert results['final_portfolio']['positions'] == 0
     assert results['final_portfolio']['equity'] == pytest.approx(results['final_portfolio']['cash'])
+
+
+@pytest.mark.parametrize('strategy_class', [MovingAverageCrossover, RSIMeanReversion, TrendFollowing])
+def test_parameter_limits_cover_exactly_the_parameters_the_strategy_reads(strategy_class):
+    import json
+    from pathlib import Path
+    defaults = strategy_class().parameters
+    assert set(strategy_class.PARAMETER_LIMITS) == set(defaults)
+    assert strategy_class.validate_parameters(defaults) == defaults
+    seeded = {c['class']: c['parameters']
+              for c in json.loads((Path(__file__).resolve().parent.parent / 'config' / 'strategies.json').read_text()).values()}
+    strategy_class.validate_parameters(seeded[strategy_class.__name__])

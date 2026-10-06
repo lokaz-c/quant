@@ -13,6 +13,18 @@ from ..portfolio import Portfolio, Order
 class MovingAverageCrossover(StrategyBase):
     """Moving Average Crossover Strategy"""
 
+    # Periods are bars; the upper bounds keep the warm-up well inside the
+    # 1,305-bar sample file
+    PARAMETER_LIMITS = {
+        'fast_period': (int, 2, 200),
+        'slow_period': (int, 3, 400),
+    }
+
+    @classmethod
+    def check_parameters(cls, parameters):
+        if parameters['fast_period'] >= parameters['slow_period']:
+            raise ValueError('fast_period must be less than slow_period')
+
     def __init__(self, parameters: Dict[str, Any] = None):
         default_params = {
             'fast_period': 20,

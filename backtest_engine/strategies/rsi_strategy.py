@@ -13,6 +13,17 @@ from ..portfolio import Portfolio, Order
 class RSIMeanReversion(StrategyBase):
     """RSI-based mean reversion strategy"""
 
+    PARAMETER_LIMITS = {
+        'rsi_period': (int, 2, 100),
+        'oversold': (float, 1, 99),
+        'overbought': (float, 1, 99),
+    }
+
+    @classmethod
+    def check_parameters(cls, parameters):
+        if parameters['oversold'] >= parameters['overbought']:
+            raise ValueError('oversold must be less than overbought')
+
     def __init__(self, parameters: Dict[str, Any] = None):
         default_params = {
             'rsi_period': 14,

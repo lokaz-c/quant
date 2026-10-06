@@ -2,7 +2,15 @@
 Strategy API routes
 """
 from flask import Blueprint, request, jsonify
+from app.routes.errors import server_error
 from app.models.database import get_db, Strategy
+from app.services.backtest_service import BacktestService
+
+
+def _parameter_limits(name):
+    """Allowed range of each parameter, or None for a strategy with no implementation"""
+    strategy_class = BacktestService().strategy_map.get(name)
+    return strategy_class.parameter_limits() if strategy_class else None
 
 bp = Blueprint('strategy', __name__, url_prefix='/api/strategies')
 
@@ -19,15 +27,16 @@ def list_strategies():
                     'id': s.id,
                     'name': s.name,
                     'description': s.description,
-                    'parameters': s.parameters
+                    'parameters': s.parameters,
+                    'parameter_limits': _parameter_limits(s.name)
                 }
                 for s in strategies
             ]
 
         return jsonify(result), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except Exception:
+        return server_error()
 
 
 @bp.route('/<int:strategy_id>', methods=['GET'])
@@ -50,8 +59,8 @@ def get_strategy(strategy_id):
 
         return jsonify(result), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except Exception:
+        return server_error()
 
 
 @bp.route('/', methods=['POST'])
@@ -90,5 +99,5 @@ def create_strategy():
 
         return jsonify(result), 201
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except Exception:
+        return server_error()

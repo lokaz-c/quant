@@ -13,6 +13,12 @@ from ..portfolio import Portfolio, Order
 class TrendFollowing(StrategyBase):
     """Breakout-based trend following strategy"""
 
+    PARAMETER_LIMITS = {
+        'lookback_period': (int, 2, 250),
+        'atr_period': (int, 2, 100),
+        'atr_multiplier': (float, 0.5, 10),
+    }
+
     def __init__(self, parameters: Dict[str, Any] = None):
         default_params = {
             'lookback_period': 20,
